@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "seminar_id": 1,
+    "participant_name": "Илья"
+  },
+  {
+    "id": 2,
+    "seminar_id": 1,
+    "participant_name": "Иван"
+  }
+]

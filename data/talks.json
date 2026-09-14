@@ -1,0 +1,10 @@
+[
+  {
+    "id": 1,
+    "seminar_id": 1,
+    "title": "Технологии разработки",
+    "speaker": "Илья",
+    "start_time": "12:00",
+    "duration_minutes": 5
+  }
+]
