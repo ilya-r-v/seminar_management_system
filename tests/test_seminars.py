@@ -1,21 +1,30 @@
 from datetime import date
 
-from seminars import add_seminar, check_seminar_capacity, find_seminar
+from models.seminars import add_seminar, find_seminar, find_seminar_by_id
 
 
-def test_add_seminar():
-    seminars = {}
-    add_seminar(seminars, "Введение в ML", date(2026, 10, 12), 25)
-    assert len(seminars) == 1
+def test_seminar_creation():
+    seminars = []
+    seminar = add_seminar(seminars, "Введение в ML", date(2026, 10, 12), 25)
+    assert seminar.id == 1
+    assert seminar.title == "Введение в ML"
+    assert seminar.max_participants == 25
+
+
+def test_seminar_is_available_for():
+    seminars = []
+    seminar = add_seminar(seminars, "Конференция", date(2026, 11, 1), 2)
+    assert seminar.is_available_for(1)
+    assert not seminar.is_available_for(2)
 
 
 def test_find_seminar():
-    seminars = {}
+    seminars = []
     add_seminar(seminars, "Введение в ML", date(2026, 10, 12), 25)
     assert find_seminar(seminars, "ml")
 
 
-def test_check_seminar_capacity():
-    seminars = {}
-    seminar_id = add_seminar(seminars, "Конференция", date(2026, 11, 1), 50)
-    assert check_seminar_capacity(seminars, seminar_id, registered_count=10)
+def test_find_seminar_by_id():
+    seminars = []
+    seminar = add_seminar(seminars, "Лекция", date(2026, 10, 12), 25)
+    assert find_seminar_by_id(seminars, seminar.id) is seminar
