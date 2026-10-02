@@ -4,5 +4,11 @@
     "title": "фреймворки",
     "date": "2026-09-21",
     "max_participants": 2
+  },
+  {
+    "id": 2,
+    "title": "Технлогии ООп",
+    "date": "2026-10-12",
+    "max_participants": 3
   }
 ]
