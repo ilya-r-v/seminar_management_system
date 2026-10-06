@@ -9,3 +9,5 @@ urlpatterns = [
     path("seminars/", include("seminars_app.urls")),
     path("registrations/", include("registrations_app.urls")),
 ]
+
+handler404 = "homepage.views.page_not_found"

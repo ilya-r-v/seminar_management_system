@@ -5,6 +5,17 @@ from django.http import HttpRequest, HttpResponse
 from homepage.render import page
 from webdata import get_participants, get_registrations, get_seminars
 
+def page_not_found(
+    request: HttpRequest, exception: Exception
+) -> HttpResponse:
+    """Страница 404 для любых несуществующих адресов."""
+    content = """
+    <h1 class="mb-3">Страница не найдена</h1>
+    <p>Такого адреса на сайте нет.</p>
+    <a href="/" class="btn btn-primary">На главную</a>
+    """
+    return HttpResponse(page("Страница не найдена", content), status=404)
+
 
 def index(request: HttpRequest) -> HttpResponse:
     """Главная страница: краткая сводка по проекту."""
