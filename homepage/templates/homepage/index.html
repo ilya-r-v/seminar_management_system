@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Главная — Система управления семинарами{% endblock %}
+
+{% block content %}
+    <h1 class="mb-3">Система управления семинарами</h1>
+    <p class="lead">
+        Веб-интерфейс для просмотра семинаров, программы докладов
+        и регистраций участников.
+    </p>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-4">
+            <div class="card stat-card text-center h-100">
+                <div class="card-body">
+                    <p class="stat-value">{{ seminars|length }}</p>
+                    <p class="card-text">Семинаров</p>
+                    <a href="{% url 'seminars:list' %}" class="btn btn-primary btn-sm">
+                        Смотреть семинары
+                    </a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card stat-card text-center h-100">
+                <div class="card-body">
+                    <p class="stat-value">{{ participants|length }}</p>
+                    <p class="card-text">Участников</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card stat-card text-center h-100">
+                <div class="card-body">
+                    <p class="stat-value">{{ active_registrations|length }}</p>
+                    <p class="card-text">Активных регистраций</p>
+                    <a href="{% url 'registrations:list' %}" class="btn btn-primary btn-sm">
+                        Смотреть регистрации
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
