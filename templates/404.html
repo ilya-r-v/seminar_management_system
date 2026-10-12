@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block title %}Страница не найдена — Система управления семинарами{% endblock %}
+
+{% block content %}
+    <h1 class="mb-3">Страница не найдена</h1>
+    <p>Такого адреса на сайте нет.</p>
+    <a href="{% url 'homepage:index' %}" class="btn btn-primary">На главную</a>
+{% endblock %}
