@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}
+    {% if seminar %}
+        {{ seminar.title }} — Система управления семинарами
+    {% else %}
+        Семинар не найден — Система управления семинарами
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    {% if seminar %}
+        <div class="card seminar-card">
+            <div class="card-body">
+                <h1 class="card-title h3">{{ seminar.title|default:"Без названия" }}</h1>
+                <p class="card-text"><strong>ID:</strong> {{ seminar.id }}</p>
+                <p class="card-text">
+                    <strong>Дата:</strong> {{ seminar.date|date:"d.m.Y" }}
+                </p>
+                <p class="card-text">
+                    <strong>Занято мест:</strong>
+                    {{ registered_count }} / {{ seminar.max_participants }}
+                    {% if is_full %}
+                        <span class="badge bg-danger ms-2">Мест нет</span>
+                    {% else %}
+                        <span class="badge bg-success ms-2">Есть свободные места</span>
+                    {% endif %}
+                </p>
+
+                <h2 class="h5 mt-4">Программа</h2>
+                <ul class="list-group">
+                    {% for talk in schedule %}
+                        <li class="list-group-item talk-item">
+                            <span class="talk-time">{{ talk.start_time }}</span>
+                            {{ talk.title }}
+                            <span class="text-muted">
+                                ({{ talk.speaker }}, {{ talk.duration_minutes }} мин)
+                            </span>
+                        </li>
+                    {% empty %}
+                        <li class="list-group-item">Доклады пока не добавлены.</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    {% else %}
+        <h1 class="text-danger">Семинар не найден</h1>
+        <p>Семинар с указанным идентификатором отсутствует.</p>
+    {% endif %}
+
+    <a href="{% url 'seminars:list' %}" class="btn btn-outline-secondary mt-3">
+        ← к списку семинаров
+    </a>
+{% endblock %}

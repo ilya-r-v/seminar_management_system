@@ -1,87 +1,64 @@
 """Представления для страниц семинаров."""
 
-from django.http import HttpRequest, HttpResponse
+from typing import List
 
-from homepage.render import page
-from models.seminars import find_seminar_by_id
+from django.http import HttpRequest, HttpResponse
+from django.shortcuts import render
+
+from models import Registration, Seminar
+from models.seminars import find_seminar_by_id, sort_seminars
 from models.talks import get_schedule
 from webdata import get_registrations, get_seminars, load_talks_for
 
 
+def count_active_registrations(
+    registrations: List[Registration], seminar: Seminar
+) -> int:
+    """Посчитать активные регистрации на указанный семинар."""
+    return sum(
+        1
+        for registration in registrations
+        if registration.seminar.id == seminar.id
+        and not registration.is_cancelled
+    )
+
+
 def seminar_list(request: HttpRequest) -> HttpResponse:
-    """Список всех семинаров."""
-    seminars = get_seminars()
-    registrations = [r for r in get_registrations() if not r.is_cancelled]
-
-    if not seminars:
-        content = "<h1 class='mb-3'>Семинары</h1><p>Семинаров пока нет.</p>"
-        return HttpResponse(page("Семинары", content))
-
-    rows = ""
-    for seminar in sorted(seminars, key=lambda s: s.date):
-        registered_count = sum(
-            1 for r in registrations if r.seminar.id == seminar.id
+    """Список всех семинаров, отсортированный по дате."""
+    registrations = get_registrations()
+    seminar_items = []
+    for seminar in sort_seminars(get_seminars()):
+        registered_count = count_active_registrations(registrations, seminar)
+        seminar_items.append(
+            {
+                "seminar": seminar,
+                "registered_count": registered_count,
+                "is_full": not seminar.is_available_for(registered_count),
+            }
         )
-        status = (
-            "danger"
-            if not seminar.is_available_for(registered_count)
-            else "success"
-        )
-        rows += f"""
-        <a href="/seminars/{seminar.id}/"
-           class="list-group-item list-group-item-action
-                  d-flex justify-content-between align-items-center">
-            <span>
-                <strong>{seminar.title}</strong>
-                — {seminar.date.strftime('%d.%m.%Y')}
-            </span>
-            <span class="badge bg-{status}">
-                {registered_count} / {seminar.max_participants}
-            </span>
-        </a>
-        """
-
-    content = f"""
-    <h1 class="mb-3">Семинары</h1>
-    <div class="list-group">{rows}</div>
-    """
-    return HttpResponse(page("Семинары", content))
+    context = {
+        "seminar_items": seminar_items,
+    }
+    return render(request, "seminars/seminar_list.html", context)
 
 
 def seminar_detail(request: HttpRequest, seminar_id: int) -> HttpResponse:
-    """Карточка одного семинара: данные и программа докладов."""
+    """Страница одного семинара: данные и программа докладов."""
     seminars = get_seminars()
     seminar = find_seminar_by_id(seminars, seminar_id)
-    if seminar is None:
-        content = "<h1>Семинар не найден</h1>"
-        return HttpResponse(page("Семинар не найден", content), status=404)
-
-    registrations = [r for r in get_registrations() if not r.is_cancelled]
-    registered_count = sum(
-        1 for r in registrations if r.seminar.id == seminar.id
-    )
-
-    talks = load_talks_for(seminars)
-    schedule = get_schedule(talks, seminar)
-    if schedule:
-        talks_html = (
-            "<ul class='list-group'>"
-            + "".join(
-                f"<li class='list-group-item'>{t}</li>" for t in schedule
-            )
-            + "</ul>"
+    context = {
+        "seminar": seminar,
+    }
+    if seminar is not None:
+        registered_count = count_active_registrations(
+            get_registrations(), seminar
         )
-    else:
-        talks_html = "<p>Доклады пока не добавлены.</p>"
-
-    content = f"""
-    <h1 class="mb-3">{seminar.title}</h1>
-    <p>Дата: {seminar.date.strftime('%d.%m.%Y')}</p>
-    <p>
-        Занято мест: {registered_count} / {seminar.max_participants}
-    </p>
-    <h2 class="h5 mt-4">Программа</h2>
-    {talks_html}
-    <a href="/seminars/" class="btn btn-secondary mt-4">К списку семинаров</a>
-    """
-    return HttpResponse(page(seminar.title, content))
+        context["registered_count"] = registered_count
+        context["is_full"] = not seminar.is_available_for(registered_count)
+        context["schedule"] = get_schedule(load_talks_for(seminars), seminar)
+    return render(
+        request,
+        "seminars/seminar_detail.html",
+        context,
+        status=404 if seminar is None else 200,
+    )
