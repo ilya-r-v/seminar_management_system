@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}
+    {% if registration %}
+        Регистрация №{{ registration.id }} — Система управления семинарами
+    {% else %}
+        Регистрация не найдена — Система управления семинарами
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    {% if registration %}
+        <div class="card">
+            <div class="card-body">
+                <h1 class="card-title h3">Регистрация №{{ registration.id }}</h1>
+                <p class="card-text">
+                    <strong>Участник:</strong>
+                    {{ registration.participant.name }}
+                    ({{ registration.participant.email }})
+                </p>
+                <p class="card-text">
+                    <strong>Семинар:</strong>
+                    <a href="{% url 'seminars:detail' registration.seminar.id %}">
+                        {{ registration.seminar.title }}
+                    </a>
+                </p>
+                <p class="card-text">
+                    <strong>Дата семинара:</strong>
+                    {{ registration.seminar.date|date:"d.m.Y" }}
+                </p>
+                <p class="card-text">
+                    <strong>Статус:</strong>
+                    {% include "registrations/includes/registration_status.html" %}
+                </p>
+            </div>
+        </div>
+    {% else %}
+        <h1 class="text-danger">Регистрация не найдена</h1>
+        <p>Регистрация с указанным идентификатором отсутствует.</p>
+    {% endif %}
+
+    <a href="{% url 'registrations:list' %}" class="btn btn-outline-secondary mt-3">
+        ← к списку регистраций
+    </a>
+{% endblock %}

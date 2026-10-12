@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Регистрации — Система управления семинарами{% endblock %}
+
+{% block content %}
+    <h1 class="mb-3">Регистрации</h1>
+    <p class="text-muted">Всего регистраций: {{ registrations|length }}</p>
+
+    <div class="list-group">
+        {% for registration in registrations %}
+            <a href="{% url 'registrations:detail' registration.id %}"
+               class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                <span>
+                    <strong>№{{ registration.id }}.</strong>
+                    {{ registration.participant.name }}
+                    — {{ registration.seminar.title }}
+                    <span class="text-muted">({{ registration.seminar.date|date:"d.m.Y" }})</span>
+                </span>
+                {% include "registrations/includes/registration_status.html" %}
+            </a>
+        {% empty %}
+            <p>Регистраций пока нет.</p>
+        {% endfor %}
+    </div>
+{% endblock %}
