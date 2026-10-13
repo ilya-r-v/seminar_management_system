@@ -1,6 +1,6 @@
 """Представления для страниц семинаров."""
 
-from typing import List
+from typing import Any, Dict, List
 
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
@@ -46,7 +46,7 @@ def seminar_detail(request: HttpRequest, seminar_id: int) -> HttpResponse:
     """Страница одного семинара: данные и программа докладов."""
     seminars = get_seminars()
     seminar = find_seminar_by_id(seminars, seminar_id)
-    context = {
+    context: Dict[str, Any] = {
         "seminar": seminar,
     }
     if seminar is not None:
