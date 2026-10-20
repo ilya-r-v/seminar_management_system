@@ -25,7 +25,8 @@
 - HTML5, CSS3, JavaScript (собственные статические файлы)
 - Bootstrap 5.3 (базовая вёрстка, подключается через CDN)
 - pytest, flake8, mypy (тестирование и контроль качества кода)
-- Хранение данных — JSON-файлы (без базы данных на текущем этапе)
+- SQLite и стандартный модуль `sqlite3` (база данных и SQL-запросы)
+- JSON-файлы — исходные данные и хранилище консольной версии
 
 ## Основные сущности
 - **Seminar (Семинар)** — `id`, `title`, `date`, `max_participants`.
@@ -40,9 +41,11 @@
 |---|---|---|
 | Главная | `/` | Краткая сводка: число семинаров, участников, активных регистраций |
 | Список семинаров | `/seminars/` | Все семинары с датой и статусом занятости мест |
-| Карточка семинара | `/seminars/<id>/` | Дата, занятость мест, программа докладов |
-| Список регистраций | `/registrations/` | Все регистрации со статусом (активна/отменена) |
+| Свободные места | `/seminars/available/` | Поиск семинаров со свободными местами начиная с выбранной даты |
+| Карточка семинара | `/seminars/<id>/` | Дата, занятость мест, программа докладов, участники |
+| Список регистраций | `/registrations/` | Активные регистрации (`?all=1` — все, включая отменённые) |
 | Карточка регистрации | `/registrations/<id>/` | Участник, семинар, статус, ссылка на семинар |
+| Статистика | `/registrations/statistics/` | Регистрации по семинарам и участникам, популярные семинары, участники без регистраций |
 
 Для несуществующего идентификатора (`/seminars/9999/`,
 `/registrations/9999/`) выводится страница «Семинар не найден» /
@@ -72,12 +75,101 @@
 - API, контейнеризация, CI/CD.
 
 ## Хранение данных
-Данные хранятся в JSON-файлах в каталоге `data/`:
-`seminars.json`, `participants.json`, `registrations.json`,
-`talks.json`. Консольное приложение (`main.py`) и веб-интерфейс
-(Django) читают и пишут одни и те же файлы через общий модуль
-`storage.py`, поэтому обе версии приложения всегда согласованы между
-собой.
+Данные хранятся в двух местах:
+- JSON-файлы в `data/` (`seminars.json`, `participants.json`,
+  `registrations.json`, `talks.json`) — их используют консольное
+  приложение (`main.py`) и скрипт импорта;
+- база SQLite `data/seminars.sqlite` — из неё читает веб-интерфейс.
+
+Веб-страницы получают данные только SQL-запросами через `sqlite3`
+(`sqlite3.Row`, обращение к полям по имени), результат передаётся в
+существующие шаблоны через контекст. SQL на страницах не отображается.
+
+> Консольное приложение пишет в JSON, а веб-интерфейс читает SQLite.
+> Чтобы синхронизировать их, повторно запустите импорт:
+> `python3 -m db.import_json` (он очищает таблицы и загружает данные
+> заново, поэтому его можно запускать сколько угодно раз).
+
+## База данных (ПР7)
+
+### Таблицы (`sql/schema.sql`)
+**seminars** — семинары
+| Поле | Тип | Ограничения |
+|---|---|---|
+| id | INTEGER | PRIMARY KEY |
+| title | TEXT | NOT NULL |
+| seminar_date | TEXT (`YYYY-MM-DD`) | NOT NULL |
+| max_participants | INTEGER | NOT NULL |
+
+**participants** — участники
+| Поле | Тип | Ограничения |
+|---|---|---|
+| id | INTEGER | PRIMARY KEY |
+| name | TEXT | NOT NULL |
+| email | TEXT | NOT NULL |
+
+**registrations** — регистрации участников на семинары
+| Поле | Тип | Ограничения |
+|---|---|---|
+| id | INTEGER | PRIMARY KEY |
+| seminar_id | INTEGER | NOT NULL, FOREIGN KEY → seminars(id) |
+| participant_id | INTEGER | NOT NULL, FOREIGN KEY → participants(id) |
+| is_cancelled | INTEGER (0/1) | NOT NULL, DEFAULT 0 |
+
+**talks** — доклады в программе семинара
+| Поле | Тип | Ограничения |
+|---|---|---|
+| id | INTEGER | PRIMARY KEY |
+| seminar_id | INTEGER | NOT NULL, FOREIGN KEY → seminars(id) |
+| title | TEXT | NOT NULL |
+| speaker | TEXT | NOT NULL |
+| start_time | TEXT | NOT NULL |
+| duration_minutes | INTEGER | NOT NULL |
+
+Связи: один семинар — много регистраций и докладов; один участник —
+много регистраций (связь «многие ко многим» между семинарами и
+участниками реализована таблицей `registrations`). Внешние ключи
+включаются командой `PRAGMA foreign_keys = ON` при каждом подключении.
+
+### Пакет `db/`
+- `db/database.py` — путь к базе, `get_connection()`, `init_db()`
+  (выполняет `schema.sql`), `fetch_all()` и `fetch_one()`;
+- `db/import_json.py` — импорт данных из JSON в SQLite.
+
+### Создание базы и импорт данных
+```bash
+python3 -m db.import_json
+```
+Скрипт создаёт `data/seminars.sqlite` по `sql/schema.sql` и загружает
+в неё данные из JSON. Просмотреть базу вручную:
+```bash
+sqlite3 data/seminars.sqlite
+```
+
+### SQL-запросы (`sql/queries.sql`, 17 запросов)
+| Группа | Запросы |
+|---|---|
+| Выборка списков | 1 — семинары, 2 — участники |
+| Фильтрация (WHERE) | 3 — семинары с большим числом мест, 4 — активные регистрации, 5 — семинары от даты, 6 — доклады семинара |
+| JOIN | 7 — регистрации с участником и семинаром, 8 — участники семинара, 9 — доклады с названиями семинаров |
+| COUNT | 10 — активные регистрации, 11 — семинары, 12 — участники |
+| GROUP BY / HAVING | 13 — семинары с числом занятых мест, 14 — регистрации по участникам, 15 — популярные семинары, 16 — семинары со свободными местами от даты |
+| Подзапросы | 17 — участники без активных регистраций |
+
+### Представления, работающие с SQLite
+| Представление | Что делает |
+|---|---|
+| `homepage.views.index` | три COUNT-запроса для сводки на главной |
+| `seminars_app.views.seminar_list` | список семинаров с занятостью мест (LEFT JOIN + GROUP BY) |
+| `seminars_app.views.seminar_detail` | семинар, программа докладов, участники (JOIN) |
+| `seminars_app.views.available_seminars` | поиск семинаров со свободными местами по дате |
+| `registrations_app.views.registration_list` | активные или все регистрации (JOIN трёх таблиц) |
+| `registrations_app.views.registration_detail` | одна регистрация |
+| `registrations_app.views.statistics` | статистика (GROUP BY, HAVING, подзапрос) |
+
+Пользовательские сценарии: просмотр списка семинаров; просмотр
+программы и участников семинара; просмотр активных регистраций;
+поиск свободных мест по дате; просмотр статистики.
 
 ## Структура проекта
 ```
@@ -92,7 +184,15 @@ seminar-management-system/
 │   ├── participants.py
 │   ├── registrations.py
 │   └── talks.py
-├── data/                      # JSON-файлы с данными
+├── db/                        # слой SQLite (ПР7)
+│   ├── __init__.py
+│   ├── database.py            # подключение, init_db, fetch_all/fetch_one
+│   └── import_json.py         # импорт JSON → SQLite
+├── sql/
+│   ├── schema.sql             # структура таблиц
+│   └── queries.sql            # 17 учебных SQL-запросов
+├── data/                      # данные
+│   ├── seminars.sqlite        # база SQLite
 │   ├── seminars.json
 │   ├── participants.json
 │   ├── registrations.json
@@ -101,7 +201,8 @@ seminar-management-system/
 │   ├── test_seminars.py
 │   ├── test_participants.py
 │   ├── test_registrations.py
-│   └── test_talks.py
+│   ├── test_talks.py
+│   └── test_database.py        # тесты слоя SQLite
 ├── manage.py                  # управляющий скрипт Django
 ├── seminar_site/              # конфигурация Django-проекта
 │   ├── settings.py
@@ -128,6 +229,7 @@ seminar-management-system/
 │   └── templates/seminars/
 │       ├── seminar_list.html
 │       ├── seminar_detail.html
+│       ├── available.html
 │       └── includes/
 │           └── seminar_card.html
 ├── registrations_app/          # Django-приложение: страницы регистраций
@@ -136,6 +238,7 @@ seminar-management-system/
 │   └── templates/registrations/
 │       ├── registration_list.html
 │       ├── registration_detail.html
+│       ├── statistics.html
 │       └── includes/
 │           └── registration_status.html
 ├── requirements.txt
@@ -218,8 +321,10 @@ return render(request, "registrations/registration_list.html", context)
 |---|---|
 | `homepage:index` | `/` |
 | `seminars:list` | `/seminars/` |
+| `seminars:available` | `/seminars/available/` |
 | `seminars:detail` | `/seminars/<id>/` |
 | `registrations:list` | `/registrations/` |
+| `registrations:statistics` | `/registrations/statistics/` |
 | `registrations:detail` | `/registrations/<id>/` |
 
 Пример: `{% url 'seminars:detail' item.seminar.id %}`.
@@ -258,18 +363,20 @@ python main.py
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python manage.py migrate
+python3 -m db.import_json
 python manage.py runserver
 ```
 Затем открыть в браузере `http://127.0.0.1:8000/`.
 
-Обе версии используют одни и те же файлы в `data/`.
+Консольная версия работает с JSON, веб-версия — с `data/seminars.sqlite`
+(см. раздел «Хранение данных»).
 
 ## Тестирование
 ```bash
 python -m pytest -v
 ```
-Тесты покрывают классы `Seminar`, `Participant`, `Registration`, `Talk`
+Тесты `tests/test_database.py` проверяют схему, внешние ключи, импорт
+и выполнение `queries.sql`. Остальные тесты покрывают классы `Seminar`, `Participant`, `Registration`, `Talk`
 и их основные сценарии (добавление, поиск, регистрация с проверкой
 мест, отмена регистрации, запрет повторной регистрации).
 
@@ -286,7 +393,7 @@ flake8, чтобы линтер не сканировал код сторонн�
 ## Git
 Репозиторий ведётся с коммитами, соответствующими номеру практической
 работы (например, `PR1: ...`, `PR2: ...`, `PR3: ...`, `PR5: ...`,
-`PR6: ...`).
+`PR6: ...`, `PR7: add SQLite database and SQL queries`).
 Перед коммитом рекомендуется проверить состояние рабочего дерева
 (`git status`), прогнать тесты и линтер, затем зафиксировать изменения
 (`git add`, `git commit`) и отправить их в удалённый репозиторий
@@ -298,13 +405,16 @@ JSON-хранилище, тесты), ПР3 (ООП-рефакторинг), П�
 Django поверх консольного приложения без базы данных), ПР6 (перевод
 веб-интерфейса на Django-шаблоны: базовый шаблон, наследование, блоки,
 include, контекст, циклы и условия, фильтры, именованные URL и
-пространства имён, собственные CSS, JavaScript и изображение).
+пространства имён, собственные CSS, JavaScript и изображение), ПР7
+(база данных SQLite, `schema.sql`, импорт из JSON, 17 SQL-запросов,
+представления на SQL с `sqlite3.Row`, страницы поиска и статистики).
 
-Данные по-прежнему хранятся в JSON-файлах; Django ORM, база данных
-приложения и Django Forms пока не используются.
+Веб-интерфейс читает данные из SQLite через чистый SQL; Django ORM и
+Django Forms пока не используются, поэтому в вебе данные только
+просматриваются.
 
 На следующих этапах планируется:
-- перенос сущностей в Django ORM и подключение базы данных;
+- перенос сущностей в Django ORM;
 - реализация пользователей (регистрация и авторизация);
 - создание и редактирование объектов через Django Forms;
 - разработка API;

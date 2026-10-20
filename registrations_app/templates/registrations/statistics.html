@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Статистика — Система управления семинарами{% endblock %}
+
+{% block content %}
+    <h1 class="mb-3">Статистика регистраций</h1>
+    <p class="lead">Активных регистраций всего: <strong>{{ total_registrations }}</strong></p>
+
+    <h2 class="h5 mt-4">Регистрации по семинарам</h2>
+    <table class="table table-striped stats-table">
+        <thead>
+            <tr>
+                <th>Семинар</th>
+                <th>Дата</th>
+                <th>Занято мест</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in seminar_statistics %}
+                <tr>
+                    <td><a href="{% url 'seminars:detail' item.id %}">{{ item.title }}</a></td>
+                    <td>{{ item.date_ru }}</td>
+                    <td>{{ item.registrations_count }} / {{ item.max_participants }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="3">Данные отсутствуют.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h2 class="h5 mt-4">Регистрации по участникам</h2>
+    <table class="table table-striped stats-table">
+        <thead>
+            <tr>
+                <th>Участник</th>
+                <th>Email</th>
+                <th>Активных регистраций</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in participant_statistics %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.email }}</td>
+                    <td>{{ item.registrations_count }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="3">Данные отсутствуют.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h2 class="h5 mt-4">Востребованные семинары</h2>
+    <p class="text-muted">Заняты не менее половины мест.</p>
+    <ul class="list-group mb-4">
+        {% for item in popular_seminars %}
+            <li class="list-group-item d-flex justify-content-between">
+                <a href="{% url 'seminars:detail' item.id %}">{{ item.title }}</a>
+                <span>{{ item.registrations_count }} / {{ item.max_participants }}</span>
+            </li>
+        {% empty %}
+            <li class="list-group-item">Таких семинаров пока нет.</li>
+        {% endfor %}
+    </ul>
+
+    <h2 class="h5 mt-4">Участники без активных регистраций</h2>
+    <ul class="list-group mb-4">
+        {% for item in idle_participants %}
+            <li class="list-group-item">
+                {{ item.name }} <span class="text-muted">({{ item.email }})</span>
+            </li>
+        {% empty %}
+            <li class="list-group-item">У всех участников есть активные регистрации.</li>
+        {% endfor %}
+    </ul>
+{% endblock %}

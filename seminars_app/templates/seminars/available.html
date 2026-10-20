@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Свободные места — Система управления семинарами{% endblock %}
+
+{% block content %}
+    <h1 class="mb-3">Семинары со свободными местами</h1>
+    <p class="text-muted">
+        Укажите дату: будут показаны семинары, которые проходят в этот день
+        или позже и на которые ещё есть свободные места.
+    </p>
+
+    <form method="get" class="row g-2 align-items-end mb-4">
+        <div class="col-auto">
+            <label for="date" class="form-label">Дата</label>
+            <input
+                type="date"
+                id="date"
+                name="date"
+                class="form-control"
+                value="{{ selected_date }}"
+            >
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary">Найти</button>
+        </div>
+    </form>
+
+    {% if error %}
+        <p class="text-danger">{{ error }}</p>
+    {% elif selected_date %}
+        <h2 class="h5 mb-3">Начиная с {{ selected_date }}</h2>
+        {% for seminar in seminars %}
+            <article class="card seminar-card mb-3">
+                <div class="card-body d-flex justify-content-between align-items-center">
+                    <div>
+                        <h3 class="h5 card-title mb-1">{{ seminar.title }}</h3>
+                        <p class="card-text text-muted mb-2">Дата: {{ seminar.date_ru }}</p>
+                        <a href="{% url 'seminars:detail' seminar.id %}" class="btn btn-primary btn-sm">
+                            Подробнее
+                        </a>
+                    </div>
+                    <span class="badge seats-badge bg-success">
+                        Свободно: {{ seminar.free_places }} из {{ seminar.max_participants }}
+                    </span>
+                </div>
+            </article>
+        {% empty %}
+            <p>Семинаров со свободными местами на эти даты нет.</p>
+        {% endfor %}
+    {% endif %}
+
+    <a href="{% url 'seminars:list' %}" class="btn btn-outline-secondary mt-3">
+        ← к списку семинаров
+    </a>
+{% endblock %}

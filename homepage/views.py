@@ -3,7 +3,23 @@
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
 
-from webdata import get_participants, get_registrations, get_seminars
+from db.database import fetch_one
+
+SEMINARS_COUNT_SQL = """
+    SELECT COUNT(*) AS seminars_count
+    FROM seminars;
+"""
+
+PARTICIPANTS_COUNT_SQL = """
+    SELECT COUNT(*) AS participants_count
+    FROM participants;
+"""
+
+ACTIVE_REGISTRATIONS_COUNT_SQL = """
+    SELECT COUNT(*) AS registrations_count
+    FROM registrations
+    WHERE is_cancelled = 0;
+"""
 
 
 def page_not_found(
@@ -14,15 +30,17 @@ def page_not_found(
 
 
 def index(request: HttpRequest) -> HttpResponse:
-    """Главная страница: краткая сводка по проекту."""
-    active_registrations = [
-        registration
-        for registration in get_registrations()
-        if not registration.is_cancelled
-    ]
+    """Главная страница: сводка по данным из базы SQLite."""
+    seminars = fetch_one(SEMINARS_COUNT_SQL)
+    participants = fetch_one(PARTICIPANTS_COUNT_SQL)
+    registrations = fetch_one(ACTIVE_REGISTRATIONS_COUNT_SQL)
     context = {
-        "seminars": get_seminars(),
-        "participants": get_participants(),
-        "active_registrations": active_registrations,
+        "seminars_count": seminars["seminars_count"] if seminars else 0,
+        "participants_count": (
+            participants["participants_count"] if participants else 0
+        ),
+        "active_registrations_count": (
+            registrations["registrations_count"] if registrations else 0
+        ),
     }
     return render(request, "homepage/index.html", context)

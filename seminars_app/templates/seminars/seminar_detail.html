@@ -15,12 +15,12 @@
                 <h1 class="card-title h3">{{ seminar.title|default:"Без названия" }}</h1>
                 <p class="card-text"><strong>ID:</strong> {{ seminar.id }}</p>
                 <p class="card-text">
-                    <strong>Дата:</strong> {{ seminar.date|date:"d.m.Y" }}
+                    <strong>Дата:</strong> {{ seminar.date_ru }}
                 </p>
                 <p class="card-text">
                     <strong>Занято мест:</strong>
-                    {{ registered_count }} / {{ seminar.max_participants }}
-                    {% if is_full %}
+                    {{ seminar.registered_count }} / {{ seminar.max_participants }}
+                    {% if seminar.is_full %}
                         <span class="badge bg-danger ms-2">Мест нет</span>
                     {% else %}
                         <span class="badge bg-success ms-2">Есть свободные места</span>
@@ -39,6 +39,18 @@
                         </li>
                     {% empty %}
                         <li class="list-group-item">Доклады пока не добавлены.</li>
+                    {% endfor %}
+                </ul>
+
+                <h2 class="h5 mt-4">Участники</h2>
+                <ul class="list-group">
+                    {% for participant in participants %}
+                        <li class="list-group-item">
+                            {{ participant.name }}
+                            <span class="text-muted">({{ participant.email }})</span>
+                        </li>
+                    {% empty %}
+                        <li class="list-group-item">Активных регистраций пока нет.</li>
                     {% endfor %}
                 </ul>
             </div>

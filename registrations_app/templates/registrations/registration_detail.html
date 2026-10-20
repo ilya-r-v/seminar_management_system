@@ -15,18 +15,18 @@
                 <h1 class="card-title h3">Регистрация №{{ registration.id }}</h1>
                 <p class="card-text">
                     <strong>Участник:</strong>
-                    {{ registration.participant.name }}
-                    ({{ registration.participant.email }})
+                    {{ registration.participant_name }}
+                    ({{ registration.participant_email }})
                 </p>
                 <p class="card-text">
                     <strong>Семинар:</strong>
-                    <a href="{% url 'seminars:detail' registration.seminar.id %}">
-                        {{ registration.seminar.title }}
+                    <a href="{% url 'seminars:detail' registration.seminar_id %}">
+                        {{ registration.seminar_title }}
                     </a>
                 </p>
                 <p class="card-text">
                     <strong>Дата семинара:</strong>
-                    {{ registration.seminar.date|date:"d.m.Y" }}
+                    {{ registration.date_ru }}
                 </p>
                 <p class="card-text">
                     <strong>Статус:</strong>

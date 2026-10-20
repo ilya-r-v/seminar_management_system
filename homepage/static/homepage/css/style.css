@@ -58,3 +58,7 @@ main {
     color: #6c757d;
     border-top: 1px solid #dde3ec;
 }
+
+.stats-table {
+    background-color: #ffffff;
+}
