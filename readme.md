@@ -25,7 +25,8 @@
 - HTML5, CSS3, JavaScript (собственные статические файлы)
 - Bootstrap 5.3 (базовая вёрстка, подключается через CDN)
 - pytest, flake8, mypy (тестирование и контроль качества кода)
-- SQLite и стандартный модуль `sqlite3` (база данных и SQL-запросы)
+- SQLite, доступ к данным через Django ORM (модели и миграции)
+- стандартный модуль `sqlite3` — слой ПР7 и перенос данных в базу Django
 - JSON-файлы — исходные данные и хранилище консольной версии
 
 ## Основные сущности
@@ -40,17 +41,34 @@
 | Страница | URL | Описание |
 |---|---|---|
 | Главная | `/` | Краткая сводка: число семинаров, участников, активных регистраций |
-| Список семинаров | `/seminars/` | Все семинары с датой и статусом занятости мест |
+| Список семинаров | `/seminars/` | Все семинары с датой и статусом занятости мест, поиск по названию (`?q=`) |
 | Свободные места | `/seminars/available/` | Поиск семинаров со свободными местами начиная с выбранной даты |
 | Карточка семинара | `/seminars/<id>/` | Дата, занятость мест, программа докладов, участники |
-| Список регистраций | `/registrations/` | Активные регистрации (`?all=1` — все, включая отменённые) |
+| Список регистраций | `/registrations/` | Регистрации с фильтрами (статус, семинар, участник, дата), поиском, сортировкой и разбивкой на страницы |
 | Карточка регистрации | `/registrations/<id>/` | Участник, семинар, статус, ссылка на семинар |
 | Статистика | `/registrations/statistics/` | Регистрации по семинарам и участникам, популярные семинары, участники без регистраций |
 
 Для несуществующего идентификатора (`/seminars/9999/`,
-`/registrations/9999/`) выводится страница «Семинар не найден» /
-«Регистрация не найдена», а HTTP-ответ имеет статус 404. Для любого
-несуществующего адреса используется собственный шаблон `404.html`.
+`/registrations/9999/`) представление вызывает `get_object_or_404()`:
+HTTP-ответ имеет статус 404 и выводится собственный шаблон `404.html`,
+как и для любого несуществующего адреса.
+
+Параметры списка регистраций (`/registrations/`):
+
+| Параметр | Значения | Назначение |
+|---|---|---|
+| `status` | `active` (по умолчанию), `cancelled`, `all` | фильтр по статусу |
+| `seminar`, `participant` | идентификатор | фильтр по семинару и участнику |
+| `date` | `ГГГГ-ММ-ДД` | фильтр по дате семинара |
+| `q` | текст | поиск по имени и почте участника, названию семинара |
+| `sort` | `date` (по умолчанию), `seminar`, `participant` | сортировка |
+| `page` | номер | страница (по 5 записей) |
+
+Некорректная дата даёт сообщение об ошибке, неизвестные значения
+`status` и `sort` заменяются значениями по умолчанию, нечисловые
+идентификаторы игнорируются, неверный номер страницы открывает первую
+страницу. Ссылки навигации по страницам сохраняют выбранные фильтры
+и сортировку (тег `{% querystring %}`).
 
 Все страницы формируются Django-шаблонами: представления только
 готовят данные и передают их в шаблон через контекст. Функция `page()`
@@ -67,30 +85,162 @@
   регистрации — на Django-шаблонах, с общей навигацией, собственными
   стилями, логотипом и JavaScript.
 
-На данном этапе (ПР6) не реализовано — запланировано на следующие
+На данном этапе (ПР9) не реализовано — запланировано на следующие
 практические работы:
-- перенос сущностей на Django ORM и подключение базы данных;
 - Django Forms для создания и редактирования объектов через веб;
 - регистрация и авторизация пользователей;
 - API, контейнеризация, CI/CD.
 
 ## Хранение данных
-Данные хранятся в двух местах:
-- JSON-файлы в `data/` (`seminars.json`, `participants.json`,
-  `registrations.json`, `talks.json`) — их используют консольное
-  приложение (`main.py`) и скрипт импорта;
-- база SQLite `data/seminars.sqlite` — из неё читает веб-интерфейс.
+В проекте три хранилища, у каждого своя роль:
 
-Веб-страницы получают данные только SQL-запросами через `sqlite3`
-(`sqlite3.Row`, обращение к полям по имени), результат передаётся в
-существующие шаблоны через контекст. SQL на страницах не отображается.
+| Файл | Кто использует | Роль |
+|---|---|---|
+| `db.sqlite3` | веб-интерфейс (Django ORM) | рабочая база приложения, таблицы создаются миграциями |
+| `data/seminars.sqlite` | скрипты `db/` | исходная база ПР7, источник для переноса данных |
+| `data/*.json` | консольное приложение `main.py` | данные консольной версии |
 
-> Консольное приложение пишет в JSON, а веб-интерфейс читает SQLite.
-> Чтобы синхронизировать их, повторно запустите импорт:
-> `python3 -m db.import_json` (он очищает таблицы и загружает данные
-> заново, поэтому его можно запускать сколько угодно раз).
+Веб-страницы получают данные только через Django ORM: представления
+обращаются к менеджерам моделей, а результат передаётся в шаблоны
+через контекст. Прямых SQL-запросов и чтения JSON в представлениях
+больше нет.
+
+`db.sqlite3` в репозиторий не входит (исключён в `.gitignore`): после
+клонирования таблицы создаются командой `python manage.py migrate`, а
+данные переносятся скриптом `python db/import_sqlite_to_orm.py`.
+
+> Цепочка данных: консольное приложение пишет в JSON →
+> `python3 -m db.import_json` переносит JSON в `data/seminars.sqlite` →
+> `python db/import_sqlite_to_orm.py` переносит записи в `db.sqlite3`.
+> Оба скрипта можно запускать повторно. Второй обновляет и добавляет
+> записи по идентификатору, но не удаляет те, которых нет в источнике.
+
+## Django ORM (ПР9)
+
+### Модели
+| Модель | Файл | Поля |
+|---|---|---|
+| `Seminar` — семинар | `seminars_app/models.py` | `title` (CharField), `seminar_date` (DateField), `max_participants` (PositiveIntegerField) |
+| `Talk` — доклад | `seminars_app/models.py` | `seminar` (ForeignKey), `title`, `speaker` (CharField), `start_time` (TimeField), `duration_minutes` (PositiveIntegerField) |
+| `Participant` — участник | `participants_app/models.py` | `name` (CharField), `email` (EmailField) |
+| `Registration` — регистрация | `registrations_app/models.py` | `seminar` (ForeignKey), `participant` (ForeignKey), `is_cancelled` (BooleanField, по умолчанию `False`) |
+
+Первичный ключ `id` Django создаёт автоматически. У каждой модели
+заданы `__str__()`, сортировка по умолчанию (`Meta.ordering`) и
+человекочитаемые названия. Модели зарегистрированы в админке.
+
+`Participant` — участник предметной области, а не встроенный
+пользователь Django. Классы из каталога `models/` относятся к
+консольной версии и с Django ORM не связаны.
+
+### Связи
+| Связь | Поле | `on_delete` | Обратный доступ |
+|---|---|---|---|
+| семинар → регистрации (1:N) | `Registration.seminar` | `PROTECT` | `seminar.registrations` |
+| участник → регистрации (1:N) | `Registration.participant` | `PROTECT` | `participant.registrations` |
+| семинар → доклады (1:N) | `Talk.seminar` | `CASCADE` | `seminar.talks` |
+
+`PROTECT` не даёт удалить семинар или участника, пока на них ссылаются
+регистрации (сохраняется история). `CASCADE` удаляет доклады вместе с
+семинаром: доклад без семинара не имеет смысла. Связь «многие ко
+многим» между семинарами и участниками реализована моделью
+`Registration`.
+
+Методы моделей:
+- `Seminar.objects.with_places()` — добавляет к семинарам
+  `registered_count` (активные регистрации) и `free_places`; условие
+  стоит внутри `Count(..., filter=Q(...))`, поэтому семинары без
+  регистраций остаются в выборке (аналог `LEFT JOIN` из ПР7);
+- `Registration.cancel()` — отменяет регистрацию и сохраняет
+  изменение (`save(update_fields=["is_cancelled"])`).
+
+Правило «нельзя зарегистрироваться, если мест нет» проверяется в
+консольной версии; в веб-версии создание записей через формы будет
+добавлено в следующих работах.
+
+### Миграции
+Выбрана стратегия «таблицы, управляемые Django, и перенос данных»:
+исходная база ПР7 не изменяется, Django создаёт свои таблицы в
+`db.sqlite3`.
+```bash
+python manage.py makemigrations          # создать файлы миграций
+python manage.py showmigrations          # состояние миграций
+python manage.py sqlmigrate seminars_app 0001   # SQL миграции
+python manage.py migrate                 # применить миграции
+python manage.py makemigrations --check  # нет ли несозданных миграций
+```
+Файлы миграций (`*/migrations/0001_initial.py`) хранятся в Git.
+
+### Перенос данных из базы ПР7
+```bash
+cp data/seminars.sqlite data/seminars_backup.sqlite   # резервная копия
+python db/inspect_source_db.py       # таблицы, столбцы, число записей
+python manage.py migrate             # таблицы в db.sqlite3
+python db/import_sqlite_to_orm.py    # перенос через ORM
+```
+`db/import_sqlite_to_orm.py` читает `data/seminars.sqlite` и создаёт
+записи методом `update_or_create()` в одной транзакции
+(`transaction.atomic()`). Сначала переносятся семинары и участники,
+затем регистрации и доклады, которые на них ссылаются. Идентификаторы
+сохраняются, строки дат и времени превращаются в `date` и `time`,
+`0/1` — в `False/True`. В конце скрипт печатает количество записей —
+его нужно сверить с выводом `inspect_source_db.py`.
+
+Проверка в Django shell (`python manage.py shell`):
+```python
+from registrations_app.models import Registration
+for r in Registration.objects.select_related("seminar", "participant"):
+    print(r.pk, r.seminar.title, r.participant.name, r.is_cancelled)
+```
+
+### ORM-запросы проекта
+| № | Запрос | Где используется | Приёмы |
+|---|---|---|---|
+| 1 | `Seminar.objects.with_places()` | список семинаров | получение набора, `annotate`, `Count`, `Q`, `F` |
+| 2 | `get_object_or_404(Seminar.objects.with_places(), pk=...)` | карточка семинара | получение одного объекта |
+| 3 | `.filter(title__icontains=query)` | список семинаров | поиск по строковому полю |
+| 4 | `.order_by("seminar_date", "title")` | список семинаров | сортировка по нескольким полям |
+| 5 | `seminar.talks.order_by("start_time")` | карточка семинара | обратная связь, сортировка по одному полю |
+| 6 | `Participant.objects.filter(registrations__seminar=..., registrations__is_cancelled=False)` | карточка семинара | фильтрация по полям связанной модели |
+| 7 | `.filter(seminar_date__gte=..., free_places__gt=0)` | свободные места | несколько условий, условие по аннотации |
+| 8 | `Registration.objects.filter(is_cancelled=False)` | список регистраций, главная | фильтрация по одному условию |
+| 9 | `.filter(seminar__seminar_date=...)` | список регистраций | фильтрация по полю связанной модели |
+| 10 | `.filter(seminar_id=...)`, `.filter(participant_id=...)` | список регистраций | фильтрация по внешним ключам |
+| 11 | `.filter(Q(participant__name__icontains=q) \| Q(participant__email__icontains=q) \| Q(seminar__title__icontains=q))` | список регистраций | поиск по нескольким полям |
+| 12 | `.annotate(seminar_title=F("seminar__title"), ...).values(...)` | список регистраций | данные связанных моделей, выбор полей |
+| 13 | `.order_by(SORT_FIELDS[sort], "id")` | список регистраций | сортировка по полю связанной модели |
+| 14 | `Paginator(registrations, 5).get_page(...)` | список регистраций | постраничный вывод |
+| 15 | `get_object_or_404(Registration.objects.select_related("seminar", "participant"), pk=...)` | карточка регистрации | связанные объекты одним запросом |
+| 16 | `Registration.objects.aggregate(total=Count("id"), active=..., cancelled=...)` | статистика | сводные показатели |
+| 17 | `Participant.objects.annotate(registrations_count=Count("registrations", filter=Q(...)))` | статистика | показатель по группам |
+| 18 | `Seminar.objects.with_places().annotate(doubled_count=F("registered_count") * 2).filter(doubled_count__gte=F("max_participants"), ...)` | статистика | фильтрация по агрегату (аналог `HAVING`) |
+| 19 | `Participant.objects.exclude(registrations__is_cancelled=False)` | статистика | исключение записей |
+| 20 | `Seminar.objects.count()`, `Participant.objects.count()` | главная | подсчёт записей |
+
+Отменённые регистрации не учитываются при подсчёте занятых мест и в
+статистике. Поле сортировки выбирается из словаря `SORT_FIELDS`:
+произвольный текст из адреса в `order_by()` не попадает.
+
+> Особенность SQLite: поиск `icontains` не различает регистр только
+> для латинских букв. Для кириллицы регистр учитывается: запрос
+> «иван» не найдёт участника «Иван».
+
+### Представления
+| Представление | Что делает |
+|---|---|
+| `homepage.views.index` | сводка: число семинаров, участников, активных регистраций |
+| `seminars_app.views.seminar_list` | список семинаров с занятостью мест и поиском |
+| `seminars_app.views.seminar_detail` | семинар, программа докладов, участники |
+| `seminars_app.views.available_seminars` | поиск семинаров со свободными местами по дате |
+| `registrations_app.views.registration_list` | фильтры, поиск, сортировка, страницы |
+| `registrations_app.views.registration_detail` | одна регистрация со связанными объектами |
+| `registrations_app.views.statistics` | итоги и показатели по семинарам и участникам |
 
 ## База данных (ПР7)
+Слой ПР7 сохранён как предыдущая реализация: `sql/schema.sql`,
+`sql/queries.sql`, `db/database.py`, `db/import_json.py` и база
+`data/seminars.sqlite`. Представления их больше не используют; база
+служит источником для переноса данных в `db.sqlite3`.
 
 ### Таблицы (`sql/schema.sql`)
 **seminars** — семинары
@@ -156,7 +306,9 @@ sqlite3 data/seminars.sqlite
 | GROUP BY / HAVING | 13 — семинары с числом занятых мест, 14 — регистрации по участникам, 15 — популярные семинары, 16 — семинары со свободными местами от даты |
 | Подзапросы | 17 — участники без активных регистраций |
 
-### Представления, работающие с SQLite
+### Представления ПР7 (заменены на ORM в ПР9)
+В ПР7 эти представления выполняли SQL-запросы через `sqlite3`:
+
 | Представление | Что делает |
 |---|---|
 | `homepage.views.index` | три COUNT-запроса для сводки на главной |
@@ -184,15 +336,17 @@ seminar-management-system/
 │   ├── participants.py
 │   ├── registrations.py
 │   └── talks.py
-├── db/                        # слой SQLite (ПР7)
+├── db/                        # скрипты работы с базами
 │   ├── __init__.py
-│   ├── database.py            # подключение, init_db, fetch_all/fetch_one
-│   └── import_json.py         # импорт JSON → SQLite
+│   ├── database.py            # ПР7: подключение, init_db, fetch_all/fetch_one
+│   ├── import_json.py         # ПР7: импорт JSON → data/seminars.sqlite
+│   ├── inspect_source_db.py   # ПР9: просмотр структуры исходной базы
+│   └── import_sqlite_to_orm.py  # ПР9: перенос данных в базу Django
 ├── sql/
 │   ├── schema.sql             # структура таблиц
 │   └── queries.sql            # 17 учебных SQL-запросов
 ├── data/                      # данные
-│   ├── seminars.sqlite        # база SQLite
+│   ├── seminars.sqlite        # исходная база ПР7
 │   ├── seminars.json
 │   ├── participants.json
 │   ├── registrations.json
@@ -203,6 +357,7 @@ seminar-management-system/
 │   ├── test_registrations.py
 │   ├── test_talks.py
 │   └── test_database.py        # тесты слоя SQLite
+├── db.sqlite3                 # база Django (создаётся миграциями, не в Git)
 ├── manage.py                  # управляющий скрипт Django
 ├── seminar_site/              # конфигурация Django-проекта
 │   ├── settings.py
@@ -223,7 +378,11 @@ seminar-management-system/
 │       ├── css/style.css       # собственные стили проекта
 │       ├── js/main.js          # текущий год в подвале
 │       └── img/logo.png        # логотип
-├── seminars_app/               # Django-приложение: страницы семинаров
+├── seminars_app/               # Django-приложение: семинары и доклады
+│   ├── models.py               # модели Seminar и Talk
+│   ├── migrations/             # миграции
+│   ├── admin.py
+│   ├── tests.py                # тесты моделей и страниц
 │   ├── views.py
 │   ├── urls.py
 │   └── templates/seminars/
@@ -232,7 +391,15 @@ seminar-management-system/
 │       ├── available.html
 │       └── includes/
 │           └── seminar_card.html
-├── registrations_app/          # Django-приложение: страницы регистраций
+├── participants_app/           # Django-приложение: участники
+│   ├── models.py               # модель Participant
+│   ├── migrations/
+│   └── admin.py
+├── registrations_app/          # Django-приложение: регистрации
+│   ├── models.py               # модель Registration
+│   ├── migrations/
+│   ├── admin.py
+│   ├── tests.py                # тесты списка, статистики, переноса
 │   ├── views.py
 │   ├── urls.py
 │   └── templates/registrations/
@@ -249,14 +416,17 @@ seminar-management-system/
 ## Назначение модулей
 - `models/seminars.py`, `models/participants.py`,
   `models/registrations.py`, `models/talks.py` — классы и функции
-  предметной области (используются и консолью, и веб-слоем).
+  предметной области консольной версии.
+- `seminars_app/models.py`, `participants_app/models.py`,
+  `registrations_app/models.py` — модели Django ORM веб-версии.
 - `storage.py` — чтение/запись JSON, преобразование между словарями и
   объектами.
 - `utils.py` — валидированный ввод данных в консольном режиме.
-- `webdata.py` — тонкая обёртка над `storage.py` для веб-представлений.
+- `webdata.py` — обёртка над `storage.py` из ПР5 (веб-слоем больше не
+  используется).
 - `homepage/views.py`, `seminars_app/views.py`,
-  `registrations_app/views.py` — функции-представления Django: читают
-  данные через `webdata.py`, готовят словарь контекста и вызывают
+  `registrations_app/views.py` — функции-представления Django: получают
+  данные через Django ORM, готовят словарь контекста и вызывают
   `render()`. HTML во views не формируется.
 - `templates/`, `*/templates/` — Django-шаблоны страниц.
 - `homepage/static/homepage/` — собственные CSS, JavaScript и логотип.
@@ -287,11 +457,11 @@ seminar-management-system/
 ### Контекст
 Представления передают данные в шаблон словарём контекста, например:
 ```python
-context = {"registrations": get_registrations()}
-return render(request, "registrations/registration_list.html", context)
+context = {"registration": registration}
+return render(request, "registrations/registration_detail.html", context)
 ```
-Для списка семинаров представление заранее считает число активных
-регистраций и признак «мест нет» (`seminar_items`), а шаблон только
+Для списка семинаров ORM-запрос заранее считает число активных
+регистраций и свободных мест (`seminar_items`), а шаблон только
 выводит готовые значения.
 
 ### Циклы и условия
@@ -363,18 +533,27 @@ python main.py
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python3 -m db.import_json
+python manage.py migrate             # создать таблицы в db.sqlite3
+python db/import_sqlite_to_orm.py    # перенести данные из базы ПР7
 python manage.py runserver
 ```
 Затем открыть в браузере `http://127.0.0.1:8000/`.
 
-Консольная версия работает с JSON, веб-версия — с `data/seminars.sqlite`
-(см. раздел «Хранение данных»).
+Консольная версия работает с JSON, веб-версия — с базой `db.sqlite3`
+через Django ORM (см. раздел «Хранение данных»). Для входа в админку
+(`/admin/`) нужен суперпользователь: `python manage.py createsuperuser`.
 
 ## Тестирование
 ```bash
-python -m pytest -v
+python -m pytest -v        # консольная версия и слой ПР7
+python manage.py test      # модели, ORM-запросы и страницы (ПР9)
 ```
+Тесты Django (`seminars_app/tests.py`, `registrations_app/tests.py`)
+работают на временной базе и проверяют: подсчёт мест без отменённых
+регистраций, поиск свободных мест, фильтры, поиск, сортировку и
+страницы списка регистраций, показатели статистики, ответ 404, защиту
+от удаления (`PROTECT`) и перенос данных из базы ПР7.
+
 Тесты `tests/test_database.py` проверяют схему, внешние ключи, импорт
 и выполнение `queries.sql`. Остальные тесты покрывают классы `Seminar`, `Participant`, `Registration`, `Talk`
 и их основные сценарии (добавление, поиск, регистрация с проверкой
@@ -383,17 +562,20 @@ python -m pytest -v
 ## Проверка качества кода
 ```bash
 python manage.py check
+python manage.py makemigrations --check
+python manage.py showmigrations
 flake8 . --extend-exclude=venv
 mypy main.py
 ```
-Файл `setup.cfg` исключает `.venv`, `__pycache__` и `.git` из проверки
-flake8, чтобы линтер не сканировал код сторонних библиотек внутри
+Файл `setup.cfg` исключает `.venv`, `__pycache__`, `.git` и
+автоматически созданные файлы миграций из проверки flake8, чтобы линтер не сканировал код сторонних библиотек внутри
 виртуального окружения.
 
 ## Git
 Репозиторий ведётся с коммитами, соответствующими номеру практической
 работы (например, `PR1: ...`, `PR2: ...`, `PR3: ...`, `PR5: ...`,
-`PR6: ...`, `PR7: add SQLite database and SQL queries`).
+`PR6: ...`, `PR7: add SQLite database and SQL queries`,
+`PR9: ...`).
 Перед коммитом рекомендуется проверить состояние рабочего дерева
 (`git status`), прогнать тесты и линтер, затем зафиксировать изменения
 (`git add`, `git commit`) и отправить их в удалённый репозиторий
@@ -407,16 +589,21 @@ Django поверх консольного приложения без базы 
 include, контекст, циклы и условия, фильтры, именованные URL и
 пространства имён, собственные CSS, JavaScript и изображение), ПР7
 (база данных SQLite, `schema.sql`, импорт из JSON, 17 SQL-запросов,
-представления на SQL с `sqlite3.Row`, страницы поиска и статистики).
+представления на SQL с `sqlite3.Row`, страницы поиска и статистики),
+ПР9 (модели Django ORM и связи между ними, миграции, перенос данных
+из базы ПР7, перевод всех представлений на ORM, фильтрация, поиск,
+сортировка и постраничный вывод списка регистраций).
 
-Веб-интерфейс читает данные из SQLite через чистый SQL; Django ORM и
+Веб-интерфейс получает данные через Django ORM из базы `db.sqlite3`.
 Django Forms пока не используются, поэтому в вебе данные только
-просматриваются.
+просматриваются (изменять их можно через админку или Django shell).
 
 На следующих этапах планируется:
-- перенос сущностей в Django ORM;
 - реализация пользователей (регистрация и авторизация);
 - создание и редактирование объектов через Django Forms;
 - разработка API;
 - контейнеризация приложения;
 - настройка CI/CD.
+
+## Автор
+Роднов Илья, группа ЭФБО-02-24, РТУ МИРЭА.

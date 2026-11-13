@@ -5,13 +5,13 @@
                 {{ item.title|default:"Без названия" }}
             </h2>
             <p class="card-text text-muted mb-2">
-                Дата: {{ item.date_ru }}
+                Дата: {{ item.seminar_date|date:"d.m.Y" }}
             </p>
             <a href="{% url 'seminars:detail' item.id %}" class="btn btn-primary btn-sm">
                 Подробнее
             </a>
         </div>
-        <span class="badge seats-badge {% if item.is_full %}bg-danger{% else %}bg-success{% endif %}">
+        <span class="badge seats-badge {% if item.free_places <= 0 %}bg-danger{% else %}bg-success{% endif %}">
             {{ item.registered_count }} / {{ item.max_participants }}
         </span>
     </div>

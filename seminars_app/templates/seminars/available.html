@@ -34,7 +34,7 @@
                 <div class="card-body d-flex justify-content-between align-items-center">
                     <div>
                         <h3 class="h5 card-title mb-1">{{ seminar.title }}</h3>
-                        <p class="card-text text-muted mb-2">Дата: {{ seminar.date_ru }}</p>
+                        <p class="card-text text-muted mb-2">Дата: {{ seminar.seminar_date|date:"d.m.Y" }}</p>
                         <a href="{% url 'seminars:detail' seminar.id %}" class="btn btn-primary btn-sm">
                             Подробнее
                         </a>

@@ -22,6 +22,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "homepage",
     "seminars_app",
+    "participants_app",
     "registrations_app",
 ]
 

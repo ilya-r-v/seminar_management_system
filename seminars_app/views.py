@@ -1,145 +1,85 @@
-"""Представления для страниц семинаров (данные берутся из SQLite)."""
+"""Представления для страниц семинаров (данные через Django ORM)."""
 
-import sqlite3
-from datetime import date
-from typing import Any, Dict, List
+from datetime import datetime
 
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 
-from db.database import fetch_all, fetch_one
-
-# Семинары с числом активных регистраций и признаком «мест нет».
-# LEFT JOIN сохраняет семинары без регистраций (значение 0).
-SEMINARS_SELECT_SQL = """
-    SELECT
-        seminars.id,
-        seminars.title,
-        seminars.seminar_date,
-        strftime('%d.%m.%Y', seminars.seminar_date) AS date_ru,
-        seminars.max_participants,
-        COUNT(registrations.id) AS registered_count,
-        (
-            COUNT(registrations.id) >= seminars.max_participants
-        ) AS is_full
-    FROM seminars
-    LEFT JOIN registrations
-        ON registrations.seminar_id = seminars.id
-        AND registrations.is_cancelled = 0
-"""
-
-SEMINARS_GROUP_SQL = """
-    GROUP BY
-        seminars.id,
-        seminars.title,
-        seminars.seminar_date,
-        seminars.max_participants
-"""
-
-SEMINAR_LIST_SQL = (
-    SEMINARS_SELECT_SQL
-    + SEMINARS_GROUP_SQL
-    + "ORDER BY seminars.seminar_date;"
-)
-
-SEMINAR_DETAIL_SQL = (
-    SEMINARS_SELECT_SQL
-    + "WHERE seminars.id = ?"
-    + SEMINARS_GROUP_SQL
-    + ";"
-)
-
-# Программа семинара: доклады по времени начала.
-SCHEDULE_SQL = """
-    SELECT
-        id,
-        title,
-        speaker,
-        start_time,
-        duration_minutes
-    FROM talks
-    WHERE seminar_id = ?
-    ORDER BY start_time;
-"""
-
-# Участники семинара: соединение регистраций с участниками.
-SEMINAR_PARTICIPANTS_SQL = """
-    SELECT
-        participants.id,
-        participants.name,
-        participants.email
-    FROM registrations
-    JOIN participants
-        ON registrations.participant_id = participants.id
-    WHERE registrations.seminar_id = ?
-      AND registrations.is_cancelled = 0
-    ORDER BY participants.name;
-"""
-
-# Семинары со свободными местами, начиная с выбранной даты.
-AVAILABLE_SEMINARS_SQL = """
-    SELECT
-        seminars.id,
-        seminars.title,
-        strftime('%d.%m.%Y', seminars.seminar_date) AS date_ru,
-        seminars.max_participants,
-        seminars.max_participants
-            - COUNT(registrations.id) AS free_places
-    FROM seminars
-    LEFT JOIN registrations
-        ON registrations.seminar_id = seminars.id
-        AND registrations.is_cancelled = 0
-    WHERE seminars.seminar_date >= ?
-    GROUP BY
-        seminars.id,
-        seminars.title,
-        seminars.seminar_date,
-        seminars.max_participants
-    HAVING COUNT(registrations.id) < seminars.max_participants
-    ORDER BY seminars.seminar_date;
-"""
+from participants_app.models import Participant
+from seminars_app.models import Seminar
 
 
 def seminar_list(request: HttpRequest) -> HttpResponse:
-    """Список всех семинаров, отсортированный по дате."""
-    seminar_items: List[sqlite3.Row] = fetch_all(SEMINAR_LIST_SQL)
+    """Список семинаров с поиском по названию."""
+    # Поисковый запрос из строки адреса: /seminars/?q=...
+    query = request.GET.get("q", "").strip()
+
+    # Все семинары с числом занятых и свободных мест.
+    seminar_items = Seminar.objects.with_places()
+
+    # Поиск по части названия без учёта регистра.
+    if query:
+        seminar_items = seminar_items.filter(title__icontains=query)
+
+    # Сортировка: по дате, при равных датах — по названию.
+    seminar_items = seminar_items.order_by("seminar_date", "title")
+
     context = {
         "seminar_items": seminar_items,
+        "query": query,
     }
     return render(request, "seminars/seminar_list.html", context)
 
 
 def seminar_detail(request: HttpRequest, seminar_id: int) -> HttpResponse:
     """Страница одного семинара: данные, программа и участники."""
-    seminar = fetch_one(SEMINAR_DETAIL_SQL, (seminar_id,))
-    context: Dict[str, Any] = {
-        "seminar": seminar,
-    }
-    if seminar is not None:
-        context["schedule"] = fetch_all(SCHEDULE_SQL, (seminar_id,))
-        context["participants"] = fetch_all(
-            SEMINAR_PARTICIPANTS_SQL, (seminar_id,)
-        )
-    return render(
-        request,
-        "seminars/seminar_detail.html",
-        context,
-        status=404 if seminar is None else 200,
+    # Семинар по первичному ключу; если его нет — ответ 404.
+    seminar = get_object_or_404(
+        Seminar.objects.with_places(),
+        pk=seminar_id,
     )
+
+    # Программа: доклады семинара через обратную связь (related_name).
+    schedule = seminar.talks.order_by("start_time")
+
+    # Участники с активной регистрацией на этот семинар:
+    # фильтрация по полям связанной модели Registration.
+    participants = Participant.objects.filter(
+        registrations__seminar=seminar,
+        registrations__is_cancelled=False,
+    ).order_by("name")
+
+    context = {
+        "seminar": seminar,
+        "schedule": schedule,
+        "participants": participants,
+    }
+    return render(request, "seminars/seminar_detail.html", context)
 
 
 def available_seminars(request: HttpRequest) -> HttpResponse:
     """Поиск семинаров со свободными местами, начиная с выбранной даты."""
-    selected_date = request.GET.get("date", "")
-    seminars: List[sqlite3.Row] = []
+    selected_date = request.GET.get("date", "").strip()
+    seminars = []
     error = ""
+
     if selected_date:
         try:
-            date.fromisoformat(selected_date)
+            # Проверяем ввод: строка должна быть датой ГГГГ-ММ-ДД.
+            search_date = datetime.strptime(
+                selected_date, "%Y-%m-%d"
+            ).date()
         except ValueError:
             error = "Укажите дату в формате ГГГГ-ММ-ДД."
         else:
-            seminars = fetch_all(AVAILABLE_SEMINARS_SQL, (selected_date,))
+            # Два условия сразу: дата не раньше выбранной
+            # и есть хотя бы одно свободное место.
+            # Отменённые регистрации места не занимают.
+            seminars = Seminar.objects.with_places().filter(
+                seminar_date__gte=search_date,
+                free_places__gt=0,
+            ).order_by("seminar_date")
+
     context = {
         "selected_date": selected_date,
         "error": error,

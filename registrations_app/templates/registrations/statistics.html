@@ -5,6 +5,9 @@
 {% block content %}
     <h1 class="mb-3">Статистика регистраций</h1>
     <p class="lead">Активных регистраций всего: <strong>{{ total_registrations }}</strong></p>
+    <p class="text-muted">
+        Всего регистраций: {{ totals.total }}, из них отменено: {{ totals.cancelled }}.
+    </p>
 
     <h2 class="h5 mt-4">Регистрации по семинарам</h2>
     <table class="table table-striped stats-table">
@@ -19,8 +22,8 @@
             {% for item in seminar_statistics %}
                 <tr>
                     <td><a href="{% url 'seminars:detail' item.id %}">{{ item.title }}</a></td>
-                    <td>{{ item.date_ru }}</td>
-                    <td>{{ item.registrations_count }} / {{ item.max_participants }}</td>
+                    <td>{{ item.seminar_date|date:"d.m.Y" }}</td>
+                    <td>{{ item.registered_count }} / {{ item.max_participants }}</td>
                 </tr>
             {% empty %}
                 <tr><td colspan="3">Данные отсутствуют.</td></tr>
@@ -56,7 +59,7 @@
         {% for item in popular_seminars %}
             <li class="list-group-item d-flex justify-content-between">
                 <a href="{% url 'seminars:detail' item.id %}">{{ item.title }}</a>
-                <span>{{ item.registrations_count }} / {{ item.max_participants }}</span>
+                <span>{{ item.registered_count }} / {{ item.max_participants }}</span>
             </li>
         {% empty %}
             <li class="list-group-item">Таких семинаров пока нет.</li>
