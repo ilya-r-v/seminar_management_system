@@ -175,8 +175,7 @@ LEFT JOIN registrations
 GROUP BY participants.id, participants.name, participants.email
 ORDER BY registrations_count DESC, participants.name;
 
--- Запрос 15. Востребованные семинары: заняты не менее половины мест
--- (HAVING фильтрует группы после группировки)
+-- Востребованные семинары: заняты не менее половины мест
 SELECT
     seminars.title,
     seminars.max_participants,
@@ -189,12 +188,7 @@ GROUP BY seminars.id, seminars.title, seminars.max_participants
 HAVING COUNT(registrations.id) * 2 >= seminars.max_participants
 ORDER BY registered_count DESC, seminars.title;
 
-
--- ==========================================================
--- 6. Поиск и подзапросы
--- ==========================================================
-
--- Запрос 16. Семинары со свободными местами, начиная с даты
+-- Семинары со свободными местами, начиная с даты
 SELECT
     seminars.id,
     seminars.title,
