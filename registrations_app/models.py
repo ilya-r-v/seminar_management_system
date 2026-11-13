@@ -7,8 +7,48 @@ from participants_app.models import Participant
 from seminars_app.models import Seminar
 
 
+class RegistrationQuerySet(models.QuerySet):
+    """Набор запросов для работы с регистрациями."""
+
+    def active(self):
+        """Только активные регистрации."""
+        return self.filter(status=self.model.Status.ACTIVE)
+
+    def cancelled(self):
+        """Только отменённые регистрации."""
+        return self.filter(status=self.model.Status.CANCELLED)
+
+    def completed(self):
+        """Только завершённые регистрации."""
+        return self.filter(status=self.model.Status.COMPLETED)
+
+    def for_date(self, selected_date):
+        """Регистрации на семинары, которые проходят в указанную дату."""
+        return self.filter(seminar__seminar_date=selected_date)
+
+
+class RegistrationManager(
+    models.Manager.from_queryset(RegistrationQuerySet)
+):
+    """Менеджер модели Registration с дополнительными методами.
+
+    Registration.objects.all() по-прежнему возвращает все записи,
+    фильтрация происходит только при явном вызове active() и других.
+    """
+
+
 class Registration(models.Model):
     """Регистрация участника на семинар."""
+
+    class Status(models.TextChoices):
+        """Состояния регистрации: код в базе и название для человека."""
+
+        # Регистрация действует и занимает место на семинаре.
+        ACTIVE = "active", "Активна"
+        # Регистрация отменена, место освобождено.
+        CANCELLED = "cancelled", "Отменена"
+        # Семинар прошёл, регистрация закрыта.
+        COMPLETED = "completed", "Завершена"
 
     # Семинар, на который оформлена регистрация.
     # PROTECT запрещает удалить семинар, пока на него есть регистрации:
@@ -28,11 +68,16 @@ class Registration(models.Model):
         verbose_name="Участник",
     )
 
-    # Признак отмены. Новая регистрация по умолчанию активна.
-    is_cancelled = models.BooleanField(
-        default=False,
-        verbose_name="Регистрация отменена",
+    # Статус регистрации. Новая регистрация по умолчанию активна.
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+        verbose_name="Статус регистрации",
     )
+
+    # Менеджер с методами active(), cancelled(), completed(), for_date().
+    objects = RegistrationManager()
 
     class Meta:
         # Сортировка по умолчанию: по дате семинара, затем по id.
@@ -45,6 +90,6 @@ class Registration(models.Model):
 
     def cancel(self):
         """Отменить регистрацию и сохранить изменение в базе."""
-        self.is_cancelled = True
+        self.status = self.Status.CANCELLED
         # Обновляем в базе только изменённое поле.
-        self.save(update_fields=["is_cancelled"])
+        self.save(update_fields=["status"])

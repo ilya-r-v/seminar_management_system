@@ -111,14 +111,26 @@ def import_data(source_db=SOURCE_DB):
 
         # Затем сущности, которые ссылаются на них внешними ключами.
         for row in registrations:
+            # Признак отмены 0/1 превращается в статус регистрации.
+            if row["is_cancelled"]:
+                status = Registration.Status.CANCELLED
+            else:
+                status = Registration.Status.ACTIVE
+            defaults = {
+                "seminar_id": row["seminar_id"],
+                "participant_id": row["participant_id"],
+                "status": status,
+            }
+            # В исходной базе нет статуса «завершена». Если регистрацию
+            # завершили уже в Django, повторный перенос его не сбрасывает.
+            completed = Registration.objects.completed().filter(
+                pk=row["id"]
+            )
+            if not row["is_cancelled"] and completed.exists():
+                del defaults["status"]
             Registration.objects.update_or_create(
                 pk=row["id"],
-                defaults={
-                    "seminar_id": row["seminar_id"],
-                    "participant_id": row["participant_id"],
-                    # 0/1 превращается в False/True.
-                    "is_cancelled": bool(row["is_cancelled"]),
-                },
+                defaults=defaults,
             )
 
         for row in talks:

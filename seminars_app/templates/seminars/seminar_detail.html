@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ seminar.title }} — Система управления семинарами{% endblock %}
+{% block title %}{{ seminar.title }} — {{ site_name }}{% endblock %}
 
 {% block content %}
     <div class="card seminar-card">
@@ -9,6 +9,9 @@
             <p class="card-text"><strong>ID:</strong> {{ seminar.id }}</p>
             <p class="card-text">
                 <strong>Дата:</strong> {{ seminar.seminar_date|date:"d.m.Y" }}
+                {% if seminar.is_large %}
+                    <span class="badge bg-info ms-2">Крупный семинар</span>
+                {% endif %}
             </p>
             <p class="card-text">
                 <strong>Занято мест:</strong>

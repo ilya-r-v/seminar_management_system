@@ -26,6 +26,9 @@
 - Bootstrap 5.3 (базовая вёрстка, подключается через CDN)
 - pytest, flake8, mypy (тестирование и контроль качества кода)
 - SQLite, доступ к данным через Django ORM (модели и миграции)
+- Django Admin (административная панель)
+- Django Debug Toolbar (анализ SQL-запросов при разработке)
+- Unidecode (транслитерация названий для адресов страниц)
 - стандартный модуль `sqlite3` — слой ПР7 и перенос данных в базу Django
 - JSON-файлы — исходные данные и хранилище консольной версии
 
@@ -43,10 +46,12 @@
 | Главная | `/` | Краткая сводка: число семинаров, участников, активных регистраций |
 | Список семинаров | `/seminars/` | Все семинары с датой и статусом занятости мест, поиск по названию (`?q=`) |
 | Свободные места | `/seminars/available/` | Поиск семинаров со свободными местами начиная с выбранной даты |
-| Карточка семинара | `/seminars/<id>/` | Дата, занятость мест, программа докладов, участники |
+| Карточка семинара | `/seminars/<slug>/` | Дата, занятость мест, программа докладов, участники; адрес вида `/seminars/freimvorki-1/` |
+| Старый адрес семинара | `/seminars/<id>/` | Перенаправляет на адрес со slug |
 | Список регистраций | `/registrations/` | Регистрации с фильтрами (статус, семинар, участник, дата), поиском, сортировкой и разбивкой на страницы |
 | Карточка регистрации | `/registrations/<id>/` | Участник, семинар, статус, ссылка на семинар |
 | Статистика | `/registrations/statistics/` | Регистрации по семинарам и участникам, популярные семинары, участники без регистраций |
+| Административная панель | `/admin/` | Управление семинарами, докладами, участниками и регистрациями |
 
 Для несуществующего идентификатора (`/seminars/9999/`,
 `/registrations/9999/`) представление вызывает `get_object_or_404()`:
@@ -57,7 +62,7 @@ HTTP-ответ имеет статус 404 и выводится собстве
 
 | Параметр | Значения | Назначение |
 |---|---|---|
-| `status` | `active` (по умолчанию), `cancelled`, `all` | фильтр по статусу |
+| `status` | `active` (по умолчанию), `cancelled`, `completed`, `all` | фильтр по статусу |
 | `seminar`, `participant` | идентификатор | фильтр по семинару и участнику |
 | `date` | `ГГГГ-ММ-ДД` | фильтр по дате семинара |
 | `q` | текст | поиск по имени и почте участника, названию семинара |
@@ -85,7 +90,7 @@ HTTP-ответ имеет статус 404 и выводится собстве
   регистрации — на Django-шаблонах, с общей навигацией, собственными
   стилями, логотипом и JavaScript.
 
-На данном этапе (ПР9) не реализовано — запланировано на следующие
+На данном этапе (ПР10) не реализовано — запланировано на следующие
 практические работы:
 - Django Forms для создания и редактирования объектов через веб;
 - регистрация и авторизация пользователей;
@@ -115,15 +120,15 @@ HTTP-ответ имеет статус 404 и выводится собстве
 > Оба скрипта можно запускать повторно. Второй обновляет и добавляет
 > записи по идентификатору, но не удаляет те, которых нет в источнике.
 
-## Django ORM (ПР9)
+## Django ORM (ПР9–ПР10)
 
 ### Модели
 | Модель | Файл | Поля |
 |---|---|---|
-| `Seminar` — семинар | `seminars_app/models.py` | `title` (CharField), `seminar_date` (DateField), `max_participants` (PositiveIntegerField) |
+| `Seminar` — семинар | `seminars_app/models.py` | `title` (CharField), `seminar_date` (DateField), `max_participants` (PositiveIntegerField, с подсказкой `help_text`), `is_large` (GeneratedField), `slug` (SlugField, уникальный) |
 | `Talk` — доклад | `seminars_app/models.py` | `seminar` (ForeignKey), `title`, `speaker` (CharField), `start_time` (TimeField), `duration_minutes` (PositiveIntegerField) |
 | `Participant` — участник | `participants_app/models.py` | `name` (CharField), `email` (EmailField) |
-| `Registration` — регистрация | `registrations_app/models.py` | `seminar` (ForeignKey), `participant` (ForeignKey), `is_cancelled` (BooleanField, по умолчанию `False`) |
+| `Registration` — регистрация | `registrations_app/models.py` | `seminar` (ForeignKey), `participant` (ForeignKey), `status` (CharField с `TextChoices`, по умолчанию `active`) |
 
 Первичный ключ `id` Django создаёт автоматически. У каждой модели
 заданы `__str__()`, сортировка по умолчанию (`Meta.ordering`) и
@@ -152,7 +157,48 @@ HTTP-ответ имеет статус 404 и выводится собстве
   стоит внутри `Count(..., filter=Q(...))`, поэтому семинары без
   регистраций остаются в выборке (аналог `LEFT JOIN` из ПР7);
 - `Registration.cancel()` — отменяет регистрацию и сохраняет
-  изменение (`save(update_fields=["is_cancelled"])`).
+  изменение (`save(update_fields=["status"])`);
+- `Registration.objects.active()`, `.cancelled()`, `.completed()`,
+  `.for_date(date)` — методы пользовательского менеджера
+  (`RegistrationQuerySet`); их можно соединять в цепочку, а
+  `Registration.objects.all()` по-прежнему возвращает все записи;
+- `Seminar.get_absolute_url()` — адрес страницы семинара на сайте;
+- `Seminar.save()` — при первом сохранении создаёт `slug`.
+
+### Статусы регистрации (ПР10)
+Булево поле `is_cancelled` заменено полем `status` с перечислением
+`Registration.Status` (`TextChoices`):
+
+| Код в базе | Название | Занимает место |
+|---|---|---|
+| `active` | Активна | да |
+| `cancelled` | Отменена | нет |
+| `completed` | Завершена | нет |
+
+Место на семинаре занимают только активные регистрации. Отмена и
+завершение запись не удаляют. Статус «завершена» автоматически по
+дате не выставляется — его задают в административной панели.
+
+### Вычисляемое поле `is_large` (ПР10)
+`Seminar.is_large` — `GeneratedField`: значение считает сама база
+данных (`max_participants >= 30` — «крупный семинар») и хранит его в
+таблице (`db_persist=True`). Вручную поле задать нельзя; при изменении
+числа мест оно пересчитывается. Порог 30 — учебный пример.
+
+### Адреса по slug (ПР10)
+`Seminar.slug` формируется из названия: `unidecode()` переводит
+русские буквы в латиницу, `slugify()` приводит строку к виду для
+адреса, в конец добавляется идентификатор: «фреймворки» →
+`freimvorki-1`. При переименовании семинара slug не меняется, чтобы
+адрес страницы оставался прежним. Шаблоны и админка получают адрес
+через `get_absolute_url()`, а не собирают его вручную.
+
+### Контекстный процессор (ПР10)
+`seminars_app/context_processors.py`, функция `seminar_context`,
+подключена в `TEMPLATES["OPTIONS"]["context_processors"]`. Она
+передаёт во все шаблоны `site_name` (название сайта) и
+`seminars_total` (число семинаров). Эти переменные используются в
+`base.html`, навигации («Семинары (2)») и на главной странице.
 
 Правило «нельзя зарегистрироваться, если мест нет» проверяется в
 консольной версии; в веб-версии создание записей через формы будет
@@ -169,7 +215,17 @@ python manage.py sqlmigrate seminars_app 0001   # SQL миграции
 python manage.py migrate                 # применить миграции
 python manage.py makemigrations --check  # нет ли несозданных миграций
 ```
-Файлы миграций (`*/migrations/0001_initial.py`) хранятся в Git.
+Файлы миграций хранятся в Git:
+
+| Приложение | Миграция | Что делает |
+|---|---|---|
+| все три | `0001_initial` | создаёт таблицы (ПР9) |
+| `registrations_app` | `0002_registration_status` | добавляет поле `status` |
+| `registrations_app` | `0003_migrate_registration_statuses` | переносит данные: `is_cancelled` → `status` |
+| `registrations_app` | `0004_remove_registration_is_cancelled` | удаляет старое поле |
+| `seminars_app` | `0002_seminar_is_large_slug` | добавляет `is_large`, `slug`, подсказку к полю |
+| `seminars_app` | `0003_populate_seminar_slugs` | заполняет `slug` у существующих семинаров |
+| `seminars_app` | `0004_seminar_slug_unique` | делает `slug` уникальным |
 
 ### Перенос данных из базы ПР7
 ```bash
@@ -183,42 +239,43 @@ python db/import_sqlite_to_orm.py    # перенос через ORM
 (`transaction.atomic()`). Сначала переносятся семинары и участники,
 затем регистрации и доклады, которые на них ссылаются. Идентификаторы
 сохраняются, строки дат и времени превращаются в `date` и `time`,
-`0/1` — в `False/True`. В конце скрипт печатает количество записей —
+`0/1` — в статус `active` / `cancelled`. В конце скрипт печатает количество записей —
 его нужно сверить с выводом `inspect_source_db.py`.
 
 Проверка в Django shell (`python manage.py shell`):
 ```python
 from registrations_app.models import Registration
 for r in Registration.objects.select_related("seminar", "participant"):
-    print(r.pk, r.seminar.title, r.participant.name, r.is_cancelled)
+    print(r.pk, r.seminar.title, r.participant.name, r.status)
 ```
 
 ### ORM-запросы проекта
 | № | Запрос | Где используется | Приёмы |
 |---|---|---|---|
 | 1 | `Seminar.objects.with_places()` | список семинаров | получение набора, `annotate`, `Count`, `Q`, `F` |
-| 2 | `get_object_or_404(Seminar.objects.with_places(), pk=...)` | карточка семинара | получение одного объекта |
+| 2 | `get_object_or_404(Seminar.objects.with_places(), slug=...)` | карточка семинара | получение одного объекта |
 | 3 | `.filter(title__icontains=query)` | список семинаров | поиск по строковому полю |
 | 4 | `.order_by("seminar_date", "title")` | список семинаров | сортировка по нескольким полям |
 | 5 | `seminar.talks.order_by("start_time")` | карточка семинара | обратная связь, сортировка по одному полю |
-| 6 | `Participant.objects.filter(registrations__seminar=..., registrations__is_cancelled=False)` | карточка семинара | фильтрация по полям связанной модели |
+| 6 | `Participant.objects.filter(registrations__seminar=..., registrations__status=Registration.Status.ACTIVE)` | карточка семинара | фильтрация по полям связанной модели |
 | 7 | `.filter(seminar_date__gte=..., free_places__gt=0)` | свободные места | несколько условий, условие по аннотации |
-| 8 | `Registration.objects.filter(is_cancelled=False)` | список регистраций, главная | фильтрация по одному условию |
-| 9 | `.filter(seminar__seminar_date=...)` | список регистраций | фильтрация по полю связанной модели |
+| 8 | `Registration.objects.active()`, `.cancelled()`, `.completed()` | список регистраций, главная | фильтрация по одному условию, методы менеджера |
+| 9 | `.for_date(selected_date)` → `.filter(seminar__seminar_date=...)` | список регистраций | фильтрация по полю связанной модели |
 | 10 | `.filter(seminar_id=...)`, `.filter(participant_id=...)` | список регистраций | фильтрация по внешним ключам |
 | 11 | `.filter(Q(participant__name__icontains=q) \| Q(participant__email__icontains=q) \| Q(seminar__title__icontains=q))` | список регистраций | поиск по нескольким полям |
 | 12 | `.annotate(seminar_title=F("seminar__title"), ...).values(...)` | список регистраций | данные связанных моделей, выбор полей |
 | 13 | `.order_by(SORT_FIELDS[sort], "id")` | список регистраций | сортировка по полю связанной модели |
 | 14 | `Paginator(registrations, 5).get_page(...)` | список регистраций | постраничный вывод |
 | 15 | `get_object_or_404(Registration.objects.select_related("seminar", "participant"), pk=...)` | карточка регистрации | связанные объекты одним запросом |
-| 16 | `Registration.objects.aggregate(total=Count("id"), active=..., cancelled=...)` | статистика | сводные показатели |
+| 16 | `Registration.objects.aggregate(total=Count("id"), active=..., cancelled=..., completed=...)` | статистика | сводные показатели |
 | 17 | `Participant.objects.annotate(registrations_count=Count("registrations", filter=Q(...)))` | статистика | показатель по группам |
 | 18 | `Seminar.objects.with_places().annotate(doubled_count=F("registered_count") * 2).filter(doubled_count__gte=F("max_participants"), ...)` | статистика | фильтрация по агрегату (аналог `HAVING`) |
-| 19 | `Participant.objects.exclude(registrations__is_cancelled=False)` | статистика | исключение записей |
-| 20 | `Seminar.objects.count()`, `Participant.objects.count()` | главная | подсчёт записей |
+| 19 | `Participant.objects.exclude(registrations__status=Registration.Status.ACTIVE)` | статистика | исключение записей |
+| 20 | `Seminar.objects.count()`, `Participant.objects.count()` | контекстный процессор, главная | подсчёт записей |
+| 21 | `Seminar.objects.filter(is_large=True)` | админка (фильтр списка) | фильтрация по вычисляемому полю |
 
-Отменённые регистрации не учитываются при подсчёте занятых мест и в
-статистике. Поле сортировки выбирается из словаря `SORT_FIELDS`:
+Отменённые и завершённые регистрации не учитываются при подсчёте
+занятых мест. Поле сортировки выбирается из словаря `SORT_FIELDS`:
 произвольный текст из адреса в `order_by()` не попадает.
 
 > Особенность SQLite: поиск `icontains` не различает регистр только
@@ -235,6 +292,71 @@ for r in Registration.objects.select_related("seminar", "participant"):
 | `registrations_app.views.registration_list` | фильтры, поиск, сортировка, страницы |
 | `registrations_app.views.registration_detail` | одна регистрация со связанными объектами |
 | `registrations_app.views.statistics` | итоги и показатели по семинарам и участникам |
+
+## Административная панель (ПР10)
+Адрес: `/admin/`. Для входа нужен суперпользователь:
+```bash
+python manage.py createsuperuser
+```
+
+Названия разделов заданы в `AppConfig.verbose_name` («Семинары»,
+«Участники», «Регистрации»), названия моделей и полей — в
+`verbose_name` моделей. Каждая модель зарегистрирована один раз
+декоратором `@admin.register`.
+
+| Модель | Настройки `ModelAdmin` |
+|---|---|
+| `Seminar` | столбцы: номер, название, дата, число мест, активных регистраций, «крупный семинар», ссылка на сайт; число мест редактируется в списке (`list_editable`); поиск по названию; фильтры по дате и признаку `is_large`; навигация по датам; `id`, `slug`, `is_large` только для чтения; доклады и регистрации в карточке (`TabularInline`); ссылка «Смотреть на сайте» |
+| `Talk` | столбцы: номер, название, докладчик, семинар, время; поиск по названию, докладчику и семинару; фильтр по семинару |
+| `Participant` | столбцы: номер, имя, почта; поиск по имени и почте; регистрации участника в карточке (`TabularInline`) |
+| `Registration` | столбцы: номер, участник, семинар, дата семинара, число мест, статус; поиск по имени и почте участника и названию семинара; фильтры по статусу, дате и семинару; навигация по датам; выбор семинара и участника с поиском (`autocomplete_fields`); массовые действия |
+
+Во всех списках заданы сортировка (`ordering`) и 20 записей на
+странице (`list_per_page`).
+
+Массовые действия для регистраций:
+- «Отменить выбранные регистрации» — вызывает `cancel()` для каждой
+  записи;
+- «Вернуть в активные» — один запрос `queryset.update()`.
+
+Оптимизация запросов в админке:
+- `list_select_related = ("seminar", "participant")` — семинар и
+  участник загружаются тем же запросом, что и список регистраций;
+- число активных регистраций в списке семинаров считается аннотацией
+  в `get_queryset()`, а не отдельным запросом на каждую строку.
+
+> Админка не проверяет правила предметной области: через неё можно
+> создать активную регистрацию на семинар, где мест уже нет, или
+> зарегистрировать участника дважды. Такие проверки появятся вместе с
+> формами в следующих работах. Удалить семинар или участника с
+> регистрациями не даст `on_delete=PROTECT`.
+
+## Анализ SQL-запросов (ПР10)
+Django Debug Toolbar подключён в `settings.py` (приложение, middleware,
+`INTERNAL_IPS`) и в `seminar_site/urls.py` (маршрут `__debug__/`).
+Панель работает только при `DEBUG = True` и не подключается при
+запуске автотестов. Она показывается справа на каждой странице сайта;
+вкладка SQL содержит список запросов.
+
+Число SQL-запросов на страницах:
+
+| Страница | Запросов | Какие |
+|---|---|---|
+| `/` | 3 | число семинаров (контекстный процессор), участников, активных регистраций |
+| `/seminars/` | 2 | список с подсчётом мест, число семинаров |
+| `/seminars/<slug>/` | 4 | семинар, доклады, участники, число семинаров |
+| `/seminars/available/?date=...` | 2 | свободные семинары, число семинаров |
+| `/registrations/` | 5 | подсчёт для страниц, записи страницы, списки семинаров и участников для формы, число семинаров |
+| `/registrations/<id>/` | 2 | регистрация с семинаром и участником (`select_related`), число семинаров |
+| `/registrations/statistics/` | 6 | итоги, четыре выборки статистики, число семинаров |
+
+Число запросов не зависит от количества записей (проблемы N+1 нет):
+- список регистраций получает названия семинара и участника тем же
+  запросом через `annotate()` с `F()` и `values()`;
+- карточка регистрации использует `select_related()`;
+- занятые места считаются аннотацией `Count(..., filter=Q(...))`.
+
+Это закреплено автотестами с `assertNumQueries`.
 
 ## База данных (ПР7)
 Слой ПР7 сохранён как предыдущая реализация: `sql/schema.sql`,
@@ -381,7 +503,8 @@ seminar-management-system/
 ├── seminars_app/               # Django-приложение: семинары и доклады
 │   ├── models.py               # модели Seminar и Talk
 │   ├── migrations/             # миграции
-│   ├── admin.py
+│   ├── admin.py                # настройка админки
+│   ├── context_processors.py   # общие данные для шаблонов
 │   ├── tests.py                # тесты моделей и страниц
 │   ├── views.py
 │   ├── urls.py
@@ -467,7 +590,8 @@ return render(request, "registrations/registration_detail.html", context)
 ### Циклы и условия
 - `{% for ... %}` / `{% empty %}` — списки семинаров, регистраций и
   программы докладов с сообщением для пустой коллекции;
-- `{% if registration.is_cancelled %}` — статус «Активна» / «Отменена»;
+- `{% if registration.status == "active" %}` — статус «Активна» /
+  «Завершена» / «Отменена»;
 - `{% if item.is_full %}` — цвет индикатора занятости мест;
 - `{% if seminar %}` / `{% if registration %}` — вывод страницы
   «не найдено», при этом view возвращает статус 404;
@@ -492,12 +616,15 @@ return render(request, "registrations/registration_detail.html", context)
 | `homepage:index` | `/` |
 | `seminars:list` | `/seminars/` |
 | `seminars:available` | `/seminars/available/` |
-| `seminars:detail` | `/seminars/<id>/` |
+| `seminars:detail` | `/seminars/<slug>/` |
+| `seminars:detail_by_id` | `/seminars/<id>/` (перенаправление) |
 | `registrations:list` | `/registrations/` |
 | `registrations:statistics` | `/registrations/statistics/` |
 | `registrations:detail` | `/registrations/<id>/` |
 
-Пример: `{% url 'seminars:detail' item.seminar.id %}`.
+Пример: `{% url 'registrations:detail' registration.id %}`. Ссылки на
+страницу семинара строятся методом модели:
+`{{ item.get_absolute_url }}`.
 
 ## Статические файлы
 Каталог `homepage/static/homepage/`:
@@ -511,8 +638,11 @@ return render(request, "registrations/registration_detail.html", context)
 проекта подключён в `settings.py`
 (`TEMPLATES["DIRS"] = [BASE_DIR / "templates"]`).
 
-Так как в проекте `DEBUG = False`, сервер разработки сам не раздаёт
-статику, поэтому в `seminar_site/urls.py` добавлен маршрут
+Режим отладки задаётся переменной окружения: по умолчанию
+`DEBUG = True`, запуск `DJANGO_DEBUG=0 python manage.py runserver`
+выключает его (тогда видна собственная страница 404, а панель отладки
+не подключается). При выключенной отладке сервер разработки сам не
+раздаёт статику, поэтому в `seminar_site/urls.py` добавлен маршрут
 `static/...` через `django.contrib.staticfiles.views.serve`
 (только для локального запуска). Проверка поиска файла:
 ```bash
@@ -535,6 +665,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python manage.py migrate             # создать таблицы в db.sqlite3
 python db/import_sqlite_to_orm.py    # перенести данные из базы ПР7
+python manage.py createsuperuser     # учётная запись для /admin/
 python manage.py runserver
 ```
 Затем открыть в браузере `http://127.0.0.1:8000/`.
@@ -546,13 +677,17 @@ python manage.py runserver
 ## Тестирование
 ```bash
 python -m pytest -v        # консольная версия и слой ПР7
-python manage.py test      # модели, ORM-запросы и страницы (ПР9)
+python manage.py test      # модели, ORM-запросы, страницы, админка
 ```
 Тесты Django (`seminars_app/tests.py`, `registrations_app/tests.py`)
 работают на временной базе и проверяют: подсчёт мест без отменённых
 регистраций, поиск свободных мест, фильтры, поиск, сортировку и
 страницы списка регистраций, показатели статистики, ответ 404, защиту
-от удаления (`PROTECT`) и перенос данных из базы ПР7.
+от удаления (`PROTECT`) и перенос данных из базы ПР7. В ПР10
+добавлены проверки: статусы регистраций и методы менеджера,
+формирование slug и адреса страниц, перенаправление со старого адреса,
+вычисляемое поле `is_large`, контекстный процессор, число SQL-запросов
+на страницах, списки, поиск, фильтры и массовые действия админки.
 
 Тесты `tests/test_database.py` проверяют схему, внешние ключи, импорт
 и выполнение `queries.sql`. Остальные тесты покрывают классы `Seminar`, `Participant`, `Registration`, `Talk`
@@ -575,7 +710,7 @@ mypy main.py
 Репозиторий ведётся с коммитами, соответствующими номеру практической
 работы (например, `PR1: ...`, `PR2: ...`, `PR3: ...`, `PR5: ...`,
 `PR6: ...`, `PR7: add SQLite database and SQL queries`,
-`PR9: ...`).
+`PR9: ...`, `PR10: ...`).
 Перед коммитом рекомендуется проверить состояние рабочего дерева
 (`git status`), прогнать тесты и линтер, затем зафиксировать изменения
 (`git add`, `git commit`) и отправить их в удалённый репозиторий
@@ -592,7 +727,11 @@ include, контекст, циклы и условия, фильтры, име�
 представления на SQL с `sqlite3.Row`, страницы поиска и статистики),
 ПР9 (модели Django ORM и связи между ними, миграции, перенос данных
 из базы ПР7, перевод всех представлений на ORM, фильтрация, поиск,
-сортировка и постраничный вывод списка регистраций).
+сортировка и постраничный вывод списка регистраций), ПР10 (настройка
+административной панели, статусы регистраций на `TextChoices`,
+пользовательский менеджер, вычисляемое поле `GeneratedField`, адреса
+семинаров по slug и `get_absolute_url()`, контекстный процессор,
+Django Debug Toolbar и анализ SQL-запросов).
 
 Веб-интерфейс получает данные через Django ORM из базы `db.sqlite3`.
 Django Forms пока не используются, поэтому в вебе данные только

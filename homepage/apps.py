@@ -7,3 +7,5 @@ class HomepageConfig(AppConfig):
 
     default_auto_field = "django.db.models.BigAutoField"
     name = "homepage"
+    # Название раздела в административной панели.
+    verbose_name = "Главная страница"

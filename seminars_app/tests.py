@@ -37,7 +37,9 @@ class SeminarTestData(TestCase):
         )
         # Отменённая регистрация место не занимает.
         Registration.objects.create(
-            seminar=cls.python, participant=cls.boris, is_cancelled=True
+            seminar=cls.python,
+            participant=cls.boris,
+            status=Registration.Status.CANCELLED,
         )
         Talk.objects.create(
             seminar=cls.django,
@@ -83,9 +85,7 @@ class SeminarPageTests(SeminarTestData):
         self.assertEqual(titles, ["Python"])
 
     def test_detail_shows_program_and_participants(self):
-        response = self.client.get(
-            reverse("seminars:detail", args=[self.django.pk])
-        )
+        response = self.client.get(self.django.get_absolute_url())
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Models")
         self.assertContains(response, "12:15")
@@ -93,7 +93,9 @@ class SeminarPageTests(SeminarTestData):
         self.assertContains(response, "Мест нет")
 
     def test_detail_of_missing_seminar_returns_404(self):
-        response = self.client.get(reverse("seminars:detail", args=[9999]))
+        response = self.client.get(
+            reverse("seminars:detail", kwargs={"slug": "net-takogo-999"})
+        )
         self.assertEqual(response.status_code, 404)
 
     def test_available_excludes_full_seminar(self):
@@ -125,6 +127,162 @@ class SeminarPageTests(SeminarTestData):
 
     def test_home_page_counts(self):
         response = self.client.get(reverse("homepage:index"))
-        self.assertEqual(response.context["seminars_count"], 2)
+        self.assertEqual(response.context["seminars_total"], 2)
         self.assertEqual(response.context["participants_count"], 2)
         self.assertEqual(response.context["active_registrations_count"], 1)
+
+
+class SeminarSlugTests(SeminarTestData):
+    """Проверка slug, get_absolute_url() и адресов страниц."""
+
+    def test_slug_is_made_from_russian_title(self):
+        seminar = Seminar.objects.create(
+            title="Основы Django ORM",
+            seminar_date=date(2026, 11, 20),
+            max_participants=10,
+        )
+        self.assertEqual(seminar.slug, f"osnovy-django-orm-{seminar.pk}")
+
+    def test_slug_does_not_change_after_rename(self):
+        old_slug = self.django.slug
+        self.django.title = "Новое название"
+        self.django.save()
+        self.django.refresh_from_db()
+        self.assertEqual(self.django.slug, old_slug)
+
+    def test_slugs_are_unique_for_same_titles(self):
+        twin = Seminar.objects.create(
+            title="Django ORM",
+            seminar_date=date(2026, 12, 1),
+            max_participants=5,
+        )
+        self.assertNotEqual(twin.slug, self.django.slug)
+
+    def test_title_without_letters_gets_default_slug(self):
+        seminar = Seminar.objects.create(
+            title="!!!",
+            seminar_date=date(2026, 12, 1),
+            max_participants=5,
+        )
+        self.assertEqual(seminar.slug, f"seminar-{seminar.pk}")
+
+    def test_get_absolute_url(self):
+        self.assertEqual(
+            self.django.get_absolute_url(),
+            f"/seminars/{self.django.slug}/",
+        )
+
+    def test_list_links_use_slug(self):
+        response = self.client.get(reverse("seminars:list"))
+        self.assertContains(response, self.django.get_absolute_url())
+
+    def test_old_address_redirects_to_slug(self):
+        response = self.client.get(f"/seminars/{self.django.pk}/")
+        self.assertRedirects(response, self.django.get_absolute_url())
+
+    def test_old_address_of_missing_seminar_returns_404(self):
+        response = self.client.get("/seminars/9999/")
+        self.assertEqual(response.status_code, 404)
+
+
+class SeminarGeneratedFieldTests(TestCase):
+    """Проверка вычисляемого поля is_large."""
+
+    def make_seminar(self, places):
+        seminar = Seminar.objects.create(
+            title="Seminar",
+            seminar_date=date(2026, 11, 20),
+            max_participants=places,
+        )
+        seminar.refresh_from_db()
+        return seminar
+
+    def test_small_seminar(self):
+        self.assertFalse(self.make_seminar(29).is_large)
+
+    def test_large_seminar(self):
+        self.assertTrue(self.make_seminar(30).is_large)
+
+    def test_value_is_recalculated(self):
+        seminar = self.make_seminar(5)
+        seminar.max_participants = 100
+        seminar.save()
+        seminar.refresh_from_db()
+        self.assertTrue(seminar.is_large)
+
+    def test_filter_by_generated_field(self):
+        self.make_seminar(5)
+        self.make_seminar(50)
+        self.assertEqual(Seminar.objects.filter(is_large=True).count(), 1)
+
+
+class RegistrationStatusPlacesTests(SeminarTestData):
+    """Места занимают только активные регистрации."""
+
+    def test_completed_registration_frees_place(self):
+        registration = Registration.objects.get(seminar=self.django)
+        registration.status = Registration.Status.COMPLETED
+        registration.save()
+        seminar = Seminar.objects.with_places().get(pk=self.django.pk)
+        self.assertEqual(seminar.registered_count, 0)
+        response = self.client.get(
+            reverse("seminars:available"), {"date": "2026-09-01"}
+        )
+        self.assertEqual(len(response.context["seminars"]), 2)
+
+
+class ContextProcessorTests(SeminarTestData):
+    """Общие данные доступны на разных страницах."""
+
+    def test_site_name_and_total_on_every_page(self):
+        addresses = [
+            reverse("homepage:index"),
+            reverse("seminars:list"),
+            reverse("registrations:list"),
+            reverse("registrations:statistics"),
+        ]
+        for address in addresses:
+            with self.subTest(address=address):
+                response = self.client.get(address)
+                self.assertEqual(
+                    response.context["site_name"],
+                    "Система управления семинарами",
+                )
+                self.assertEqual(response.context["seminars_total"], 2)
+                self.assertContains(response, "Семинары (2)")
+
+    def test_total_changes_with_data(self):
+        Seminar.objects.create(
+            title="Third",
+            seminar_date=date(2026, 12, 1),
+            max_participants=5,
+        )
+        response = self.client.get(reverse("homepage:index"))
+        self.assertContains(response, "Семинары (3)")
+
+
+class QueryCountTests(SeminarTestData):
+    """Число SQL-запросов не растёт вместе с числом записей."""
+
+    def add_seminars(self, count):
+        for number in range(count):
+            seminar = Seminar.objects.create(
+                title=f"Extra {number}",
+                seminar_date=date(2026, 12, 1),
+                max_participants=5,
+            )
+            Registration.objects.create(
+                seminar=seminar, participant=self.anna
+            )
+
+    def test_seminar_list_queries(self):
+        self.add_seminars(10)
+        # 1 — список семинаров с подсчётом мест,
+        # 2 — число семинаров в навигации (контекстный процессор).
+        with self.assertNumQueries(2):
+            self.client.get(reverse("seminars:list"))
+
+    def test_seminar_detail_queries(self):
+        # Семинар, доклады, участники и число семинаров в навигации.
+        with self.assertNumQueries(4):
+            self.client.get(self.django.get_absolute_url())

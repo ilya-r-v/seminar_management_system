@@ -3,9 +3,10 @@
 from datetime import datetime
 
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 
 from participants_app.models import Participant
+from registrations_app.models import Registration
 from seminars_app.models import Seminar
 
 
@@ -31,12 +32,19 @@ def seminar_list(request: HttpRequest) -> HttpResponse:
     return render(request, "seminars/seminar_list.html", context)
 
 
-def seminar_detail(request: HttpRequest, seminar_id: int) -> HttpResponse:
+def seminar_redirect(request: HttpRequest, seminar_id: int) -> HttpResponse:
+    """Перенаправить со старого адреса по номеру на адрес со slug."""
+    seminar = get_object_or_404(Seminar, pk=seminar_id)
+    # redirect() сам вызывает get_absolute_url() у объекта.
+    return redirect(seminar)
+
+
+def seminar_detail(request: HttpRequest, slug: str) -> HttpResponse:
     """Страница одного семинара: данные, программа и участники."""
-    # Семинар по первичному ключу; если его нет — ответ 404.
+    # Семинар по текстовому идентификатору; если его нет — ответ 404.
     seminar = get_object_or_404(
         Seminar.objects.with_places(),
-        pk=seminar_id,
+        slug=slug,
     )
 
     # Программа: доклады семинара через обратную связь (related_name).
@@ -46,7 +54,7 @@ def seminar_detail(request: HttpRequest, seminar_id: int) -> HttpResponse:
     # фильтрация по полям связанной модели Registration.
     participants = Participant.objects.filter(
         registrations__seminar=seminar,
-        registrations__is_cancelled=False,
+        registrations__status=Registration.Status.ACTIVE,
     ).order_by("name")
 
     context = {
@@ -74,7 +82,7 @@ def available_seminars(request: HttpRequest) -> HttpResponse:
         else:
             # Два условия сразу: дата не раньше выбранной
             # и есть хотя бы одно свободное место.
-            # Отменённые регистрации места не занимают.
+            # Отменённые и завершённые регистрации места не занимают.
             seminars = Seminar.objects.with_places().filter(
                 seminar_date__gte=search_date,
                 free_places__gt=0,

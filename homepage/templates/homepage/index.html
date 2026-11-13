@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Главная — Система управления семинарами{% endblock %}
+{% block title %}Главная — {{ site_name }}{% endblock %}
 
 {% block content %}
-    <h1 class="mb-3">Система управления семинарами</h1>
+    <h1 class="mb-3">{{ site_name }}</h1>
     <p class="lead">
         Веб-интерфейс для просмотра семинаров, программы докладов
         и регистраций участников. Данные хранятся в базе SQLite.
@@ -13,7 +13,7 @@
         <div class="col-md-4">
             <div class="card stat-card text-center h-100">
                 <div class="card-body">
-                    <p class="stat-value">{{ seminars_count }}</p>
+                    <p class="stat-value">{{ seminars_total }}</p>
                     <p class="card-text">Семинаров</p>
                     <a href="{% url 'seminars:list' %}" class="btn btn-primary btn-sm">
                         Смотреть семинары

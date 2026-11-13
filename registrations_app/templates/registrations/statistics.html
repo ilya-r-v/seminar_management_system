@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}Статистика — Система управления семинарами{% endblock %}
+{% block title %}Статистика — {{ site_name }}{% endblock %}
 
 {% block content %}
     <h1 class="mb-3">Статистика регистраций</h1>
     <p class="lead">Активных регистраций всего: <strong>{{ total_registrations }}</strong></p>
     <p class="text-muted">
-        Всего регистраций: {{ totals.total }}, из них отменено: {{ totals.cancelled }}.
+        Всего регистраций: {{ totals.total }}, из них отменено: {{ totals.cancelled }},
+        завершено: {{ totals.completed }}.
     </p>
 
     <h2 class="h5 mt-4">Регистрации по семинарам</h2>
@@ -21,7 +22,7 @@
         <tbody>
             {% for item in seminar_statistics %}
                 <tr>
-                    <td><a href="{% url 'seminars:detail' item.id %}">{{ item.title }}</a></td>
+                    <td><a href="{{ item.get_absolute_url }}">{{ item.title }}</a></td>
                     <td>{{ item.seminar_date|date:"d.m.Y" }}</td>
                     <td>{{ item.registered_count }} / {{ item.max_participants }}</td>
                 </tr>
@@ -58,7 +59,7 @@
     <ul class="list-group mb-4">
         {% for item in popular_seminars %}
             <li class="list-group-item d-flex justify-content-between">
-                <a href="{% url 'seminars:detail' item.id %}">{{ item.title }}</a>
+                <a href="{{ item.get_absolute_url }}">{{ item.title }}</a>
                 <span>{{ item.registered_count }} / {{ item.max_participants }}</span>
             </li>
         {% empty %}

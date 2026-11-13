@@ -1,9 +1,13 @@
-{% if registration.is_cancelled %}
-    <span class="badge bg-secondary registration-status registration-status-cancelled">
-        Отменена
-    </span>
-{% else %}
+{% if registration.status == "active" %}
     <span class="badge bg-success registration-status registration-status-active">
         Активна
+    </span>
+{% elif registration.status == "completed" %}
+    <span class="badge bg-primary registration-status registration-status-completed">
+        Завершена
+    </span>
+{% else %}
+    <span class="badge bg-secondary registration-status registration-status-cancelled">
+        Отменена
     </span>
 {% endif %}

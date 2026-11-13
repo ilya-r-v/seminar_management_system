@@ -5,7 +5,6 @@ from django.shortcuts import render
 
 from participants_app.models import Participant
 from registrations_app.models import Registration
-from seminars_app.models import Seminar
 
 
 def page_not_found(
@@ -18,11 +17,12 @@ def page_not_found(
 def index(request: HttpRequest) -> HttpResponse:
     """Главная страница: сводка по данным из базы (Django ORM)."""
     context = {
-        "seminars_count": Seminar.objects.count(),
+        # Число семинаров приходит из контекстного процессора
+        # (переменная seminars_total), здесь его считать не нужно.
         "participants_count": Participant.objects.count(),
-        # Считаем только активные (не отменённые) регистрации.
-        "active_registrations_count": Registration.objects.filter(
-            is_cancelled=False
-        ).count(),
+        # Считаем только активные регистрации.
+        "active_registrations_count": (
+            Registration.objects.active().count()
+        ),
     }
     return render(request, "homepage/index.html", context)

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Свободные места — Система управления семинарами{% endblock %}
+{% block title %}Свободные места — {{ site_name }}{% endblock %}
 
 {% block content %}
     <h1 class="mb-3">Семинары со свободными местами</h1>
@@ -35,7 +35,7 @@
                     <div>
                         <h3 class="h5 card-title mb-1">{{ seminar.title }}</h3>
                         <p class="card-text text-muted mb-2">Дата: {{ seminar.seminar_date|date:"d.m.Y" }}</p>
-                        <a href="{% url 'seminars:detail' seminar.id %}" class="btn btn-primary btn-sm">
+                        <a href="{{ seminar.get_absolute_url }}" class="btn btn-primary btn-sm">
                             Подробнее
                         </a>
                     </div>

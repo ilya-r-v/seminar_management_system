@@ -7,7 +7,7 @@
             <p class="card-text text-muted mb-2">
                 Дата: {{ item.seminar_date|date:"d.m.Y" }}
             </p>
-            <a href="{% url 'seminars:detail' item.id %}" class="btn btn-primary btn-sm">
+            <a href="{{ item.get_absolute_url }}" class="btn btn-primary btn-sm">
                 Подробнее
             </a>
         </div>

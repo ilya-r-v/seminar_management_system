@@ -7,3 +7,5 @@ class ParticipantsAppConfig(AppConfig):
 
     default_auto_field = "django.db.models.BigAutoField"
     name = "participants_app"
+    # Название раздела в административной панели.
+    verbose_name = "Участники"

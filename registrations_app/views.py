@@ -23,9 +23,11 @@ SORT_FIELDS = {
 }
 DEFAULT_SORT = "date"
 
+# Значение фильтра «все статусы» и значение по умолчанию.
+ALL_STATUSES = "all"
+DEFAULT_STATUS = Registration.Status.ACTIVE.value
 # Разрешённые значения фильтра по статусу.
-STATUSES = ("active", "cancelled", "all")
-DEFAULT_STATUS = "active"
+STATUSES = (*Registration.Status.values, ALL_STATUSES)
 
 
 def registration_list(request: HttpRequest) -> HttpResponse:
@@ -41,20 +43,24 @@ def registration_list(request: HttpRequest) -> HttpResponse:
 
     # Старая ссылка ?all=1 из ПР7 продолжает работать.
     if not status and request.GET.get("all") == "1":
-        status = "all"
+        status = ALL_STATUSES
     # Неизвестное значение заменяем значением по умолчанию.
     if status not in STATUSES:
         status = DEFAULT_STATUS
     if sort not in SORT_FIELDS:
         sort = DEFAULT_SORT
 
-    registrations = Registration.objects.all()
-
     # Фильтр по статусу: по умолчанию только активные.
-    if status == "active":
-        registrations = registrations.filter(is_cancelled=False)
-    elif status == "cancelled":
-        registrations = registrations.filter(is_cancelled=True)
+    # Методы active(), cancelled(), completed() описаны в менеджере
+    # модели, поэтому правило отбора хранится в одном месте.
+    if status == Registration.Status.ACTIVE:
+        registrations = Registration.objects.active()
+    elif status == Registration.Status.CANCELLED:
+        registrations = Registration.objects.cancelled()
+    elif status == Registration.Status.COMPLETED:
+        registrations = Registration.objects.completed()
+    else:
+        registrations = Registration.objects.all()
 
     # Фильтр по дате семинара (поле связанной модели).
     if seminar_date:
@@ -65,9 +71,7 @@ def registration_list(request: HttpRequest) -> HttpResponse:
         except ValueError:
             error = "Укажите корректную дату."
         else:
-            registrations = registrations.filter(
-                seminar__seminar_date=selected_date
-            )
+            registrations = registrations.for_date(selected_date)
 
     # Фильтры по семинару и участнику (внешние ключи).
     # Несколько filter() подряд работают как условие «И».
@@ -101,7 +105,7 @@ def registration_list(request: HttpRequest) -> HttpResponse:
         .order_by(SORT_FIELDS[sort], "id")
         .values(
             "id",
-            "is_cancelled",
+            "status",
             "seminar_id",
             "seminar_title",
             "seminar_date",
@@ -153,11 +157,18 @@ def registration_detail(
 
 def statistics(request: HttpRequest) -> HttpResponse:
     """Статистика регистраций: итоги и показатели по группам."""
-    # Сводные показатели одним запросом: всего, активных, отменённых.
+    # Сводные показатели одним запросом: всего и по каждому статусу.
     totals = Registration.objects.aggregate(
         total=Count("id"),
-        active=Count("id", filter=Q(is_cancelled=False)),
-        cancelled=Count("id", filter=Q(is_cancelled=True)),
+        active=Count(
+            "id", filter=Q(status=Registration.Status.ACTIVE)
+        ),
+        cancelled=Count(
+            "id", filter=Q(status=Registration.Status.CANCELLED)
+        ),
+        completed=Count(
+            "id", filter=Q(status=Registration.Status.COMPLETED)
+        ),
     )
 
     # Семинары с числом занятых мест (включая семинары без регистраций).
@@ -170,7 +181,7 @@ def statistics(request: HttpRequest) -> HttpResponse:
     participant_statistics = Participant.objects.annotate(
         registrations_count=Count(
             "registrations",
-            filter=Q(registrations__is_cancelled=False),
+            filter=Q(registrations__status=Registration.Status.ACTIVE),
         ),
     ).order_by("-registrations_count", "name")
 
@@ -189,7 +200,7 @@ def statistics(request: HttpRequest) -> HttpResponse:
     # Участники без активных регистраций:
     # exclude() убирает тех, у кого есть хотя бы одна активная.
     idle_participants = Participant.objects.exclude(
-        registrations__is_cancelled=False
+        registrations__status=Registration.Status.ACTIVE
     ).order_by("name")
 
     context = {

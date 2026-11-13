@@ -7,3 +7,5 @@ class RegistrationsAppConfig(AppConfig):
 
     default_auto_field = "django.db.models.BigAutoField"
     name = "registrations_app"
+    # Название раздела в административной панели.
+    verbose_name = "Регистрации"

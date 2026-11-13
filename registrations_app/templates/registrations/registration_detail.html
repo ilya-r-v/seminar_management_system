@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Регистрация №{{ registration.pk }} — Система управления семинарами{% endblock %}
+{% block title %}Регистрация №{{ registration.pk }} — {{ site_name }}{% endblock %}
 
 {% block content %}
     <div class="card">
@@ -13,7 +13,7 @@
             </p>
             <p class="card-text">
                 <strong>Семинар:</strong>
-                <a href="{% url 'seminars:detail' registration.seminar_id %}">
+                <a href="{{ registration.seminar.get_absolute_url }}">
                     {{ registration.seminar.title }}
                 </a>
             </p>
