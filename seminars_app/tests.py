@@ -1,13 +1,24 @@
 """Тесты приложения «Семинары»: модели, ORM-запросы и страницы."""
 
-from datetime import date, time
+import io
+import shutil
+import tempfile
+from datetime import date, time, timedelta
+from pathlib import Path
 
-from django.test import TestCase
-from django.urls import reverse
+from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
+from django.urls import resolve, reverse
+from django.utils import timezone
+from django.views.static import serve
+from PIL import Image
 
 from participants_app.models import Participant
 from registrations_app.models import Registration
+from seminars_app.forms import SeminarForm
 from seminars_app.models import Seminar, Talk
+from seminars_app.validators import validate_places
 
 
 class SeminarTestData(TestCase):
@@ -123,7 +134,10 @@ class SeminarPageTests(SeminarTestData):
             reverse("seminars:available"), {"date": "не-дата"}
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.context["error"])
+        # Ошибка относится к полю date формы, поиск не выполняется.
+        self.assertIn("date", response.context["form"].errors)
+        self.assertEqual(len(response.context["seminars"]), 0)
+        self.assertContains(response, "Укажите дату в формате")
 
     def test_home_page_counts(self):
         response = self.client.get(reverse("homepage:index"))
@@ -286,3 +300,258 @@ class QueryCountTests(SeminarTestData):
         # Семинар, доклады, участники и число семинаров в навигации.
         with self.assertNumQueries(4):
             self.client.get(self.django.get_absolute_url())
+
+
+def make_image(name="poster.png"):
+    """Создать в памяти маленькое настоящее изображение PNG."""
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), "navy").save(buffer, format="PNG")
+    return SimpleUploadedFile(
+        name, buffer.getvalue(), content_type="image/png"
+    )
+
+
+class SeminarSearchFormTests(SeminarTestData):
+    """Поиск семинаров через форму SeminarSearchForm."""
+
+    def test_empty_request_gives_unbound_form(self):
+        response = self.client.get(reverse("seminars:list"))
+        self.assertFalse(response.context["form"].is_bound)
+
+    def test_query_is_kept_in_form(self):
+        response = self.client.get(reverse("seminars:list"), {"q": "pyth"})
+        self.assertEqual(response.context["form"].cleaned_data["q"], "pyth")
+        self.assertContains(response, 'value="pyth"')
+
+    def test_too_long_query_is_rejected(self):
+        response = self.client.get(
+            reverse("seminars:list"), {"q": "x" * 300}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("q", response.context["form"].errors)
+        # При ошибке показывается полный список.
+        self.assertEqual(len(response.context["seminar_items"]), 2)
+
+
+class AvailableSeminarsFormTests(SeminarTestData):
+    """Поиск свободных мест через форму AvailableSeminarsForm."""
+
+    def test_empty_request_shows_no_errors(self):
+        response = self.client.get(reverse("seminars:available"))
+        self.assertFalse(response.context["form"].is_bound)
+        self.assertNotContains(response, "form-error")
+
+    def test_date_is_converted_to_date_object(self):
+        response = self.client.get(
+            reverse("seminars:available"), {"date": "2026-09-01"}
+        )
+        self.assertEqual(response.context["selected_date"], date(2026, 9, 1))
+        self.assertContains(response, "Начиная с 01.09.2026")
+
+
+class SeminarFormTests(TestCase):
+    """Проверка самой формы SeminarForm."""
+
+    def make_data(self, **changes):
+        data = {
+            "title": "Новый семинар",
+            "seminar_date": timezone.localdate() + timedelta(days=5),
+            "max_participants": 10,
+        }
+        data.update(changes)
+        return data
+
+    def test_form_has_only_allowed_fields(self):
+        self.assertEqual(
+            list(SeminarForm().fields),
+            ["title", "seminar_date", "max_participants", "image"],
+        )
+
+    def test_valid_data_without_image(self):
+        self.assertTrue(SeminarForm(self.make_data()).is_valid())
+
+    def test_today_is_allowed(self):
+        form = SeminarForm(
+            self.make_data(seminar_date=timezone.localdate())
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_past_date_is_field_error(self):
+        yesterday = timezone.localdate() - timedelta(days=1)
+        form = SeminarForm(self.make_data(seminar_date=yesterday))
+        self.assertFalse(form.is_valid())
+        self.assertIn("прошедшую дату", form.errors["seminar_date"][0])
+
+    def test_validator_rejects_zero_places(self):
+        form = SeminarForm(self.make_data(max_participants=0))
+        self.assertFalse(form.is_valid())
+        self.assertIn(
+            "не меньше одного", form.errors["max_participants"][0]
+        )
+
+    def test_validator_function(self):
+        validate_places(1)
+        with self.assertRaises(ValidationError):
+            validate_places(0)
+
+    def test_negative_places_are_rejected(self):
+        form = SeminarForm(self.make_data(max_participants=-3))
+        self.assertFalse(form.is_valid())
+        self.assertIn("max_participants", form.errors)
+
+    def test_blank_title_is_rejected(self):
+        form = SeminarForm(self.make_data(title="   "))
+        self.assertFalse(form.is_valid())
+        self.assertIn("title", form.errors)
+
+    def test_not_an_image_is_rejected(self):
+        fake = SimpleUploadedFile(
+            "notes.png", b"this is not an image", content_type="image/png"
+        )
+        form = SeminarForm(self.make_data(), {"image": fake})
+        self.assertFalse(form.is_valid())
+        self.assertIn("image", form.errors)
+
+
+class SeminarFormPageTests(TestCase):
+    """Создание и редактирование семинара, загрузка изображения."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Загруженные в тестах файлы пишутся во временный каталог,
+        # а не в настоящий каталог media/ проекта.
+        cls.media_dir = tempfile.mkdtemp()
+        cls.media_override = override_settings(MEDIA_ROOT=cls.media_dir)
+        cls.media_override.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.media_override.disable()
+        shutil.rmtree(cls.media_dir, ignore_errors=True)
+        super().tearDownClass()
+
+    def make_data(self, **changes):
+        data = {
+            "title": "Основы Django",
+            "seminar_date": (
+                timezone.localdate() + timedelta(days=5)
+            ).isoformat(),
+            "max_participants": 10,
+        }
+        data.update(changes)
+        return data
+
+    def test_get_shows_empty_form_for_files(self):
+        response = self.client.get(reverse("seminars:create"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'enctype="multipart/form-data"')
+        self.assertContains(response, "csrfmiddlewaretoken")
+
+    def test_create_without_image(self):
+        response = self.client.post(
+            reverse("seminars:create"), self.make_data()
+        )
+        seminar = Seminar.objects.get()
+        self.assertRedirects(response, seminar.get_absolute_url())
+        self.assertEqual(seminar.slug, f"osnovy-django-{seminar.pk}")
+        self.assertFalse(seminar.image)
+        page = self.client.get(seminar.get_absolute_url())
+        self.assertContains(page, "Изображение не загружено.")
+
+    def test_create_with_image(self):
+        self.client.post(
+            reverse("seminars:create"),
+            self.make_data(image=make_image()),
+        )
+        seminar = Seminar.objects.get()
+        # В базе хранится путь, файл лежит в каталоге медиафайлов.
+        self.assertTrue(seminar.image.name.startswith("seminars/"))
+        self.assertTrue(Path(seminar.image.path).exists())
+        page = self.client.get(seminar.get_absolute_url())
+        self.assertContains(page, seminar.image.url)
+        # Адрес изображения начинается с MEDIA_URL и обслуживается
+        # маршрутом раздачи медиафайлов.
+        self.assertTrue(seminar.image.url.startswith("/media/seminars/"))
+        self.assertEqual(resolve(seminar.image.url).func, serve)
+
+    def test_invalid_post_saves_nothing(self):
+        response = self.client.post(
+            reverse("seminars:create"),
+            self.make_data(max_participants=0, seminar_date="не дата"),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            set(response.context["form"].errors),
+            {"max_participants", "seminar_date"},
+        )
+        # Введённое название остаётся в форме.
+        self.assertContains(response, "Основы Django")
+        self.assertEqual(Seminar.objects.count(), 0)
+
+    def test_post_without_csrf_token_is_forbidden(self):
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(reverse("seminars:create"), self.make_data())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Seminar.objects.count(), 0)
+
+    def test_update_changes_existing_record(self):
+        self.client.post(reverse("seminars:create"), self.make_data())
+        seminar = Seminar.objects.get()
+        address = reverse("seminars:update", args=[seminar.slug])
+
+        page = self.client.get(address)
+        self.assertEqual(page.context["form"].instance, seminar)
+        self.assertContains(page, "Сохранить изменения")
+
+        response = self.client.post(
+            address,
+            self.make_data(max_participants=40, image=make_image("new.png")),
+        )
+        self.assertRedirects(response, seminar.get_absolute_url())
+        self.assertEqual(Seminar.objects.count(), 1)
+        seminar.refresh_from_db()
+        self.assertEqual(seminar.max_participants, 40)
+        self.assertTrue(seminar.is_large)
+        self.assertIn("new", seminar.image.name)
+
+    def test_past_seminar_can_be_edited_without_changing_date(self):
+        past = Seminar.objects.create(
+            title="Прошедший",
+            seminar_date=date(2020, 1, 15),
+            max_participants=5,
+        )
+        response = self.client.post(
+            reverse("seminars:update", args=[past.slug]),
+            self.make_data(title="Прошедший", seminar_date="2020-01-15"),
+        )
+        self.assertEqual(response.status_code, 302)
+        # Но перенести его на другую прошедшую дату нельзя.
+        response = self.client.post(
+            reverse("seminars:update", args=[past.slug]),
+            self.make_data(title="Прошедший", seminar_date="2020-02-01"),
+        )
+        self.assertContains(response, "прошедшую дату")
+
+    def test_update_of_missing_seminar_returns_404(self):
+        response = self.client.get(
+            reverse("seminars:update", args=["net-takogo-999"])
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_detail_page_links(self):
+        self.client.post(reverse("seminars:create"), self.make_data())
+        seminar = Seminar.objects.get()
+        page = self.client.get(seminar.get_absolute_url())
+        self.assertContains(
+            page, reverse("seminars:update", args=[seminar.slug])
+        )
+        self.assertContains(
+            page,
+            reverse("registrations:create") + f"?seminar={seminar.pk}",
+        )
+
+    def test_create_route_is_not_taken_for_slug(self):
+        self.assertEqual(
+            self.client.get("/seminars/create/").status_code, 200
+        )

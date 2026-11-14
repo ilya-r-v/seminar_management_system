@@ -1,0 +1,17 @@
+{# Одно поле формы: подпись, элемент ввода, подсказка и ошибки. #}
+<div class="form-field mb-3">
+    {# Подпись поля из параметра label. #}
+    <label for="{{ field.id_for_label }}" class="form-label">
+        {{ field.label }}
+    </label>
+    {# HTML-элемент поля, который формирует виджет. #}
+    {{ field }}
+    {# Подсказка, если она задана в форме (help_text). #}
+    {% if field.help_text %}
+        <div class="form-text">{{ field.help_text }}</div>
+    {% endif %}
+    {# Ошибки именно этого поля. #}
+    {% for error in field.errors %}
+        <div class="form-error">{{ error }}</div>
+    {% endfor %}
+</div>

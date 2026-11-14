@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}
+    {% if seminar %}Редактирование семинара{% else %}Новый семинар{% endif %} — {{ site_name }}
+{% endblock %}
+
+{% block content %}
+    {# Один шаблон обслуживает и создание, и редактирование. #}
+    {% if seminar %}
+        <h1 class="mb-3">Редактирование семинара</h1>
+    {% else %}
+        <h1 class="mb-3">Новый семинар</h1>
+    {% endif %}
+
+    <div class="card form-card">
+        <div class="card-body">
+            {# enctype нужен, чтобы браузер передал файл изображения. #}
+            <form method="post" enctype="multipart/form-data" novalidate>
+                {# Токен защищает POST-запрос от CSRF-атак. #}
+                {% csrf_token %}
+
+                {% include "includes/form_errors.html" %}
+
+                {# Перебираем все поля формы. #}
+                {% for field in form %}
+                    {% include "includes/form_field.html" %}
+                {% endfor %}
+
+                <button type="submit" class="btn btn-primary">
+                    {% if seminar %}Сохранить изменения{% else %}Создать семинар{% endif %}
+                </button>
+                {% if seminar %}
+                    <a href="{{ seminar.get_absolute_url }}" class="btn btn-outline-secondary">Отмена</a>
+                {% else %}
+                    <a href="{% url 'seminars:list' %}" class="btn btn-outline-secondary">Отмена</a>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+{% endblock %}

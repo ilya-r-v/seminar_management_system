@@ -1,13 +1,16 @@
 """Представления для страниц регистраций (данные через Django ORM)."""
 
-from datetime import datetime
-
 from django.core.paginator import Paginator
 from django.db.models import Count, F, Q
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 
 from participants_app.models import Participant
+from registrations_app.forms import (
+    RegistrationFilterForm,
+    RegistrationForm,
+)
 from registrations_app.models import Registration
 from seminars_app.models import Seminar
 
@@ -23,32 +26,43 @@ SORT_FIELDS = {
 }
 DEFAULT_SORT = "date"
 
-# Значение фильтра «все статусы» и значение по умолчанию.
-ALL_STATUSES = "all"
+# Статус по умолчанию: в списке показываются активные регистрации.
 DEFAULT_STATUS = Registration.Status.ACTIVE.value
-# Разрешённые значения фильтра по статусу.
-STATUSES = (*Registration.Status.values, ALL_STATUSES)
+
+# Сообщение об отсутствии мест (общая ошибка формы).
+NO_PLACES_ERROR = "На выбранном семинаре нет свободных мест."
 
 
 def registration_list(request: HttpRequest) -> HttpResponse:
     """Список регистраций: фильтры, поиск, сортировка, страницы."""
-    # Параметры из строки запроса.
-    seminar_date = request.GET.get("date", "").strip()
-    seminar_id = request.GET.get("seminar", "").strip()
-    participant_id = request.GET.get("participant", "").strip()
-    query = request.GET.get("q", "").strip()
-    status = request.GET.get("status", "").strip()
-    sort = request.GET.get("sort", DEFAULT_SORT).strip()
-    error = ""
+    # Форма связана с GET-параметрами запроса. Если параметров нет,
+    # передаётся None и форма остаётся несвязанной (пустой).
+    form = RegistrationFilterForm(request.GET or None)
+    # Форма проверяется один раз, результат используется ниже.
+    form_valid = form.is_bound and form.is_valid()
 
-    # Старая ссылка ?all=1 из ПР7 продолжает работать.
-    if not status and request.GET.get("all") == "1":
-        status = ALL_STATUSES
-    # Неизвестное значение заменяем значением по умолчанию.
-    if status not in STATUSES:
-        status = DEFAULT_STATUS
-    if sort not in SORT_FIELDS:
-        sort = DEFAULT_SORT
+    # Значения по умолчанию. Если форма не прошла проверку,
+    # фильтрация по непроверенным значениям не выполняется.
+    query = ""
+    seminar = None
+    participant = None
+    seminar_date = None
+    status = DEFAULT_STATUS
+    sort = DEFAULT_SORT
+    error = None
+
+    if form_valid:
+        # cleaned_data содержит проверенные и преобразованные значения:
+        # дату (date), объекты Seminar и Participant, строки.
+        query = form.cleaned_data["q"]
+        seminar = form.cleaned_data["seminar"]
+        participant = form.cleaned_data["participant"]
+        seminar_date = form.cleaned_data["date"]
+        status = form.cleaned_data["status"] or DEFAULT_STATUS
+        sort = form.cleaned_data["sort"] or DEFAULT_SORT
+    elif form.is_bound:
+        # Общее сообщение; ошибки отдельных полей выводит шаблон.
+        error = "Проверьте введённые значения фильтров."
 
     # Фильтр по статусу: по умолчанию только активные.
     # Методы active(), cancelled(), completed() описаны в менеджере
@@ -64,23 +78,14 @@ def registration_list(request: HttpRequest) -> HttpResponse:
 
     # Фильтр по дате семинара (поле связанной модели).
     if seminar_date:
-        try:
-            selected_date = datetime.strptime(
-                seminar_date, "%Y-%m-%d"
-            ).date()
-        except ValueError:
-            error = "Укажите корректную дату."
-        else:
-            registrations = registrations.for_date(selected_date)
+        registrations = registrations.for_date(seminar_date)
 
     # Фильтры по семинару и участнику (внешние ключи).
     # Несколько filter() подряд работают как условие «И».
-    if seminar_id.isdigit():
-        registrations = registrations.filter(seminar_id=int(seminar_id))
-    if participant_id.isdigit():
-        registrations = registrations.filter(
-            participant_id=int(participant_id)
-        )
+    if seminar:
+        registrations = registrations.filter(seminar=seminar)
+    if participant:
+        registrations = registrations.filter(participant=participant)
 
     # Поиск по нескольким полям: имя или почта участника,
     # либо название семинара (условия объединены через «ИЛИ»).
@@ -115,6 +120,8 @@ def registration_list(request: HttpRequest) -> HttpResponse:
     )
 
     # Постраничный вывод — после фильтрации и сортировки.
+    # Номер страницы не относится к условиям фильтрации,
+    # поэтому он читается из запроса напрямую, а не через форму.
     # get_page() сам обрабатывает неверный номер страницы.
     paginator = Paginator(registrations, REGISTRATIONS_PER_PAGE)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -122,14 +129,9 @@ def registration_list(request: HttpRequest) -> HttpResponse:
     context = {
         "registrations": page_obj,
         "page_obj": page_obj,
-        "selected_date": seminar_date,
-        "selected_seminar": seminar_id,
-        "selected_participant": participant_id,
-        "query": query,
+        "form": form,
         "status": status,
         "sort": sort,
-        "seminars": Seminar.objects.order_by("title"),
-        "participants": Participant.objects.order_by("name"),
         "error": error,
     }
     return render(request, "registrations/registration_list.html", context)
@@ -153,6 +155,108 @@ def registration_detail(
         "registrations/registration_detail.html",
         context,
     )
+
+
+def seminar_has_free_place(seminar, registration=None):
+    """Проверить, есть ли на семинаре свободное место.
+
+    Считаются только активные регистрации: отменённые и завершённые
+    места не занимают. При редактировании передаётся сама регистрация,
+    чтобы она не считалась занятым местом и не мешала самой себе.
+    """
+    occupied = Registration.objects.active().filter(seminar=seminar)
+    if registration is not None:
+        occupied = occupied.exclude(pk=registration.pk)
+    return occupied.count() < seminar.max_participants
+
+
+def registration_create(request: HttpRequest) -> HttpResponse:
+    """Создание регистрации через форму."""
+    if request.method == "POST":
+        # Форма связана с данными, которые отправил пользователь.
+        form = RegistrationForm(request.POST)
+        # is_valid() запускает проверки полей, clean_seminar() и clean().
+        if form.is_valid():
+            seminar = form.cleaned_data["seminar"]
+            # Правило предметной области: мест должно хватать.
+            if seminar_has_free_place(seminar):
+                # Статус не приходит из формы: новая регистрация
+                # получает значение по умолчанию «активна».
+                registration = form.save()
+                # После сохранения — переход на карточку регистрации.
+                return redirect(
+                    "registrations:detail",
+                    registration_id=registration.pk,
+                )
+            # Общая ошибка формы, не связанная с отдельным полем.
+            form.add_error(None, NO_PLACES_ERROR)
+    else:
+        # При GET-запросе показывается пустая форма. Если в адресе
+        # передан семинар (?seminar=3), он подставляется как начальное
+        # значение: так работает кнопка на странице семинара.
+        initial = {}
+        seminar_id = request.GET.get("seminar", "")
+        if seminar_id.isdigit():
+            initial["seminar"] = int(seminar_id)
+        form = RegistrationForm(initial=initial)
+
+    context = {"form": form}
+    return render(request, "registrations/registration_form.html", context)
+
+
+def registration_update(
+    request: HttpRequest, registration_id: int
+) -> HttpResponse:
+    """Редактирование активной регистрации."""
+    # Изменять можно только активные регистрации: для отменённых,
+    # завершённых и несуществующих вернётся ответ 404.
+    registration = get_object_or_404(
+        Registration.objects.active(),
+        pk=registration_id,
+    )
+
+    if request.method == "POST":
+        # instance связывает форму с существующей записью:
+        # save() изменит её, а не создаст новую.
+        form = RegistrationForm(request.POST, instance=registration)
+        if form.is_valid():
+            seminar = form.cleaned_data["seminar"]
+            # Сама редактируемая регистрация из подсчёта исключается.
+            if seminar_has_free_place(seminar, registration):
+                form.save()
+                return redirect(
+                    "registrations:detail",
+                    registration_id=registration.pk,
+                )
+            form.add_error(None, NO_PLACES_ERROR)
+    else:
+        # При GET-запросе поля заполнены текущими значениями.
+        form = RegistrationForm(instance=registration)
+
+    context = {
+        "form": form,
+        "registration": registration,
+    }
+    return render(request, "registrations/registration_form.html", context)
+
+
+@require_POST
+def registration_cancel(
+    request: HttpRequest, registration_id: int
+) -> HttpResponse:
+    """Отмена регистрации (только POST-запросом).
+
+    Запись не удаляется: её статус меняется на «отменена»,
+    а место на семинаре освобождается.
+    """
+    # Отменить можно только активную регистрацию, иначе — ответ 404.
+    registration = get_object_or_404(
+        Registration.objects.active(),
+        pk=registration_id,
+    )
+    # Метод модели меняет статус и сохраняет его в базе.
+    registration.cancel()
+    return redirect("registrations:list")
 
 
 def statistics(request: HttpRequest) -> HttpResponse:

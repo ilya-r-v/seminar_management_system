@@ -1,0 +1,6 @@
+{# Отмена меняет данные, поэтому это POST-форма, а не ссылка. #}
+<form method="post" action="{% url 'registrations:cancel' registration_id %}" class="d-inline">
+    {# Токен защищает POST-запрос от CSRF-атак. #}
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger btn-sm">Отменить</button>
+</form>

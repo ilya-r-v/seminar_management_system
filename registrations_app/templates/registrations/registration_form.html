@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}
+    {% if registration %}Редактирование регистрации{% else %}Новая регистрация{% endif %} — {{ site_name }}
+{% endblock %}
+
+{% block content %}
+    {# Один шаблон обслуживает и создание, и редактирование. #}
+    {% if registration %}
+        <h1 class="mb-3">Редактирование регистрации №{{ registration.pk }}</h1>
+    {% else %}
+        <h1 class="mb-3">Новая регистрация</h1>
+    {% endif %}
+
+    <div class="card form-card">
+        <div class="card-body">
+            {# Форма отправляет данные методом POST. #}
+            <form method="post" novalidate>
+                {# Токен защищает POST-запрос от CSRF-атак. #}
+                {% csrf_token %}
+
+                {% include "includes/form_errors.html" %}
+
+                {# Перебираем все поля формы. #}
+                {% for field in form %}
+                    {% include "includes/form_field.html" %}
+                {% endfor %}
+
+                <button type="submit" class="btn btn-primary">
+                    {% if registration %}Сохранить изменения{% else %}Создать регистрацию{% endif %}
+                </button>
+                <a href="{% url 'registrations:list' %}" class="btn btn-outline-secondary">
+                    Отмена
+                </a>
+            </form>
+        </div>
+    </div>
+{% endblock %}

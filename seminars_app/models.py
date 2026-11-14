@@ -6,6 +6,8 @@ from django.urls import reverse
 from django.utils.text import slugify
 from unidecode import unidecode
 
+from seminars_app.validators import validate_places
+
 # С какого числа мест семинар считается крупным.
 LARGE_SEMINAR_PLACES = 30
 
@@ -62,6 +64,8 @@ class Seminar(models.Model):
     # Максимальное число участников (неотрицательное целое).
     max_participants = models.PositiveIntegerField(
         verbose_name="Максимум участников",
+        # Дополнительная проверка: мест должно быть не меньше одного.
+        validators=[validate_places],
         help_text=(
             "Укажите, сколько человек может зарегистрироваться "
             "на семинар."
@@ -83,6 +87,17 @@ class Seminar(models.Model):
         # Вычисленное значение хранится в таблице.
         db_persist=True,
         verbose_name="Крупный семинар",
+    )
+
+    # Изображение семинара (афиша). В базе хранится путь к файлу,
+    # сам файл сохраняется в каталоге media/seminars/.
+    # Поле необязательное: семинар можно создать без изображения.
+    image = models.ImageField(
+        upload_to="seminars/",
+        blank=True,
+        null=True,
+        verbose_name="Изображение",
+        help_text="Афиша или фотография семинара (необязательно).",
     )
 
     # Текстовый идентификатор для адреса страницы: /seminars/<slug>/.

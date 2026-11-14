@@ -1,0 +1,4 @@
+{# Общие ошибки формы, не связанные с отдельным полем. #}
+{% for error in form.non_field_errors %}
+    <div class="alert alert-danger">{{ error }}</div>
+{% endfor %}

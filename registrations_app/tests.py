@@ -3,21 +3,23 @@
 import io
 import tempfile
 from contextlib import redirect_stdout
-from datetime import date, time
+from datetime import date, time, timedelta
 from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.models import ProtectedError
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 
 from db.database import get_connection, init_db
 from db.import_sqlite_to_orm import import_data
 from participants_app.models import Participant
 from registrations_app.models import Registration
-from registrations_app.views import REGISTRATIONS_PER_PAGE
+from registrations_app.forms import RegistrationForm
+from registrations_app.views import NO_PLACES_ERROR, REGISTRATIONS_PER_PAGE
 from seminars_app.models import Seminar
 
 
@@ -94,11 +96,18 @@ class RegistrationListTests(RegistrationTestData):
             self.get_ids(status="cancelled"), [self.cancelled.pk]
         )
         self.assertEqual(len(self.get_ids(status="all")), 3)
-        # Старая ссылка из ПР7.
-        self.assertEqual(len(self.get_ids(all="1")), 3)
 
-    def test_unknown_status_falls_back_to_active(self):
-        self.assertEqual(len(self.get_ids(status="xyz")), 2)
+    def test_unknown_status_is_rejected_by_form(self):
+        response = self.client.get(
+            reverse("registrations:list"), {"status": "xyz"}
+        )
+        self.assertEqual(response.status_code, 200)
+        # Значения нет в choices: ошибка поля и общее сообщение,
+        # список показывается с условиями по умолчанию.
+        self.assertIn("status", response.context["form"].errors)
+        self.assertEqual(response.context["status"], "active")
+        self.assertEqual(len(response.context["registrations"]), 2)
+        self.assertContains(response, "Проверьте введённые значения")
 
     def test_filter_by_seminar_and_participant(self):
         self.assertEqual(
@@ -122,9 +131,33 @@ class RegistrationListTests(RegistrationTestData):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context["error"])
+        self.assertIn("date", response.context["form"].errors)
 
-    def test_wrong_ids_are_ignored(self):
-        self.assertEqual(len(self.get_ids(seminar="abc")), 2)
+    def test_missing_seminar_is_rejected_by_form(self):
+        for value in ("abc", "999999"):
+            with self.subTest(value=value):
+                response = self.client.get(
+                    reverse("registrations:list"), {"seminar": value}
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("seminar", response.context["form"].errors)
+                # Непроверенное значение к запросу не применяется.
+                self.assertEqual(len(response.context["registrations"]), 2)
+
+    def test_form_keeps_selected_values(self):
+        response = self.client.get(
+            reverse("registrations:list"),
+            {"seminar": self.python.pk, "sort": "participant", "q": "ann"},
+        )
+        form = response.context["form"]
+        self.assertTrue(form.is_bound)
+        self.assertEqual(form.cleaned_data["seminar"], self.python)
+        self.assertContains(response, 'value="ann"')
+
+    def test_empty_request_gives_unbound_form(self):
+        response = self.client.get(reverse("registrations:list"))
+        self.assertFalse(response.context["form"].is_bound)
+        self.assertIsNone(response.context["error"])
 
     def test_search_by_several_fields(self):
         self.assertEqual(
@@ -155,6 +188,7 @@ class RegistrationListTests(RegistrationTestData):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["sort"], "date")
+        self.assertIn("sort", response.context["form"].errors)
 
     def test_pagination_keeps_filters(self):
         for number in range(REGISTRATIONS_PER_PAGE + 2):
@@ -496,3 +530,379 @@ class AdminTests(RegistrationTestData):
         response = self.run_action("restore_registrations", [self.cancelled])
         self.assertContains(response, "Возвращено регистраций: 1.")
         self.assertEqual(Registration.objects.cancelled().count(), 0)
+
+
+class RegistrationFormTestData(TestCase):
+    """Данные для проверки форм: семинары в будущем и в прошлом."""
+
+    @classmethod
+    def setUpTestData(cls):
+        today = timezone.localdate()
+        cls.future = Seminar.objects.create(
+            title="Future",
+            seminar_date=today + timedelta(days=10),
+            max_participants=2,
+        )
+        cls.today_seminar = Seminar.objects.create(
+            title="Today",
+            seminar_date=today,
+            max_participants=1,
+        )
+        cls.past = Seminar.objects.create(
+            title="Past",
+            seminar_date=today - timedelta(days=1),
+            max_participants=5,
+        )
+        cls.anna = Participant.objects.create(
+            name="Anna", email="anna@example.com"
+        )
+        cls.boris = Participant.objects.create(
+            name="Boris", email="boris@example.com"
+        )
+        cls.clara = Participant.objects.create(
+            name="Clara", email="clara@example.com"
+        )
+
+    def post_create(self, seminar, participant, **extra):
+        data = {"seminar": seminar.pk, "participant": participant.pk}
+        data.update(extra)
+        return self.client.post(reverse("registrations:create"), data)
+
+    def post_update(self, registration, seminar, participant):
+        return self.client.post(
+            reverse("registrations:update", args=[registration.pk]),
+            {"seminar": seminar.pk, "participant": participant.pk},
+        )
+
+
+class RegistrationFormTests(RegistrationFormTestData):
+    """Проверка самой формы RegistrationForm."""
+
+    def test_form_has_only_allowed_fields(self):
+        self.assertEqual(
+            list(RegistrationForm().fields), ["seminar", "participant"]
+        )
+
+    def test_valid_data(self):
+        form = RegistrationForm(
+            {"seminar": self.future.pk, "participant": self.anna.pk}
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_required_fields(self):
+        form = RegistrationForm({})
+        self.assertFalse(form.is_valid())
+        self.assertEqual(set(form.errors), {"seminar", "participant"})
+
+    def test_past_seminar_is_field_error(self):
+        form = RegistrationForm(
+            {"seminar": self.past.pk, "participant": self.anna.pk}
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("уже прошёл", form.errors["seminar"][0])
+
+    def test_today_seminar_is_allowed(self):
+        form = RegistrationForm(
+            {"seminar": self.today_seminar.pk, "participant": self.anna.pk}
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_duplicate_is_non_field_error(self):
+        Registration.objects.create(
+            seminar=self.future, participant=self.anna
+        )
+        form = RegistrationForm(
+            {"seminar": self.future.pk, "participant": self.anna.pk}
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("уже зарегистрирован", form.non_field_errors()[0])
+
+    def test_cancelled_registration_is_not_duplicate(self):
+        Registration.objects.create(
+            seminar=self.future,
+            participant=self.anna,
+            status=Registration.Status.CANCELLED,
+        )
+        form = RegistrationForm(
+            {"seminar": self.future.pk, "participant": self.anna.pk}
+        )
+        self.assertTrue(form.is_valid())
+
+
+class RegistrationCreateTests(RegistrationFormTestData):
+    """Создание регистрации через форму."""
+
+    def test_get_shows_empty_form(self):
+        response = self.client.get(reverse("registrations:create"))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["form"].is_bound)
+        self.assertContains(response, "csrfmiddlewaretoken")
+        # Подсказка из help_texts.
+        self.assertContains(response, "на который есть места")
+
+    def test_initial_seminar_from_address(self):
+        response = self.client.get(
+            reverse("registrations:create"), {"seminar": self.future.pk}
+        )
+        self.assertEqual(
+            response.context["form"].initial["seminar"], self.future.pk
+        )
+
+    def test_wrong_initial_seminar_is_ignored(self):
+        response = self.client.get(
+            reverse("registrations:create"), {"seminar": "abc"}
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_valid_post_creates_active_registration(self):
+        response = self.post_create(self.future, self.anna)
+        registration = Registration.objects.get()
+        self.assertRedirects(
+            response,
+            reverse("registrations:detail", args=[registration.pk]),
+        )
+        self.assertEqual(registration.seminar, self.future)
+        self.assertEqual(registration.participant, self.anna)
+        self.assertEqual(registration.status, Registration.Status.ACTIVE)
+
+    def test_status_from_request_is_ignored(self):
+        self.post_create(self.future, self.anna, status="completed")
+        self.assertEqual(
+            Registration.objects.get().status, Registration.Status.ACTIVE
+        )
+
+    def test_empty_post_shows_errors_and_saves_nothing(self):
+        response = self.client.post(reverse("registrations:create"), {})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Обязательное поле")
+        self.assertEqual(Registration.objects.count(), 0)
+
+    def test_past_seminar_is_rejected(self):
+        response = self.post_create(self.past, self.anna)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "уже прошёл")
+        self.assertEqual(Registration.objects.count(), 0)
+
+    def test_full_seminar_is_rejected(self):
+        Registration.objects.create(
+            seminar=self.today_seminar, participant=self.anna
+        )
+        response = self.post_create(self.today_seminar, self.boris)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.context["form"].non_field_errors(), [NO_PLACES_ERROR]
+        )
+        self.assertContains(response, NO_PLACES_ERROR)
+        # Введённые значения сохраняются в форме.
+        self.assertEqual(
+            response.context["form"]["participant"].value(),
+            str(self.boris.pk),
+        )
+        self.assertEqual(Registration.objects.count(), 1)
+
+    def test_cancelled_registration_does_not_take_place(self):
+        Registration.objects.create(
+            seminar=self.today_seminar,
+            participant=self.anna,
+            status=Registration.Status.CANCELLED,
+        )
+        self.post_create(self.today_seminar, self.boris)
+        self.assertEqual(Registration.objects.active().count(), 1)
+
+    def test_duplicate_is_rejected(self):
+        self.post_create(self.future, self.anna)
+        response = self.post_create(self.future, self.anna)
+        self.assertContains(response, "уже зарегистрирован")
+        self.assertEqual(Registration.objects.count(), 1)
+
+    def test_missing_seminar_is_rejected(self):
+        response = self.client.post(
+            reverse("registrations:create"),
+            {"seminar": 999999, "participant": self.anna.pk},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("seminar", response.context["form"].errors)
+
+    def test_post_without_csrf_token_is_forbidden(self):
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(
+            reverse("registrations:create"),
+            {"seminar": self.future.pk, "participant": self.anna.pk},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Registration.objects.count(), 0)
+
+    def test_new_registration_appears_in_list(self):
+        self.post_create(self.future, self.anna)
+        response = self.client.get(reverse("registrations:list"))
+        self.assertContains(response, "Anna")
+        self.assertContains(response, "Редактировать")
+        self.assertContains(response, "Отменить")
+
+
+class RegistrationUpdateTests(RegistrationFormTestData):
+    """Редактирование регистрации через форму."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.registration = Registration.objects.create(
+            seminar=cls.future, participant=cls.anna
+        )
+
+    def test_get_shows_current_values(self):
+        response = self.client.get(
+            reverse("registrations:update", args=[self.registration.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertEqual(form.instance, self.registration)
+        self.assertEqual(form["seminar"].value(), self.future.pk)
+        self.assertContains(response, "Сохранить изменения")
+
+    def test_save_without_changes_does_not_conflict_with_itself(self):
+        response = self.post_update(
+            self.registration, self.future, self.anna
+        )
+        self.assertEqual(response.status_code, 302)
+        # Новая запись не появилась.
+        self.assertEqual(Registration.objects.count(), 1)
+
+    def test_last_place_is_not_blocked_by_itself(self):
+        registration = Registration.objects.create(
+            seminar=self.today_seminar, participant=self.boris
+        )
+        response = self.post_update(
+            registration, self.today_seminar, self.clara
+        )
+        self.assertEqual(response.status_code, 302)
+        registration.refresh_from_db()
+        self.assertEqual(registration.participant, self.clara)
+
+    def test_change_participant(self):
+        self.post_update(self.registration, self.future, self.boris)
+        self.registration.refresh_from_db()
+        self.assertEqual(self.registration.participant, self.boris)
+        self.assertEqual(Registration.objects.count(), 1)
+
+    def test_change_to_full_seminar_is_rejected(self):
+        Registration.objects.create(
+            seminar=self.today_seminar, participant=self.boris
+        )
+        response = self.post_update(
+            self.registration, self.today_seminar, self.anna
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, NO_PLACES_ERROR)
+        self.registration.refresh_from_db()
+        self.assertEqual(self.registration.seminar, self.future)
+
+    def test_change_to_past_seminar_is_rejected(self):
+        response = self.post_update(self.registration, self.past, self.anna)
+        self.assertContains(response, "уже прошёл")
+        self.registration.refresh_from_db()
+        self.assertEqual(self.registration.seminar, self.future)
+
+    def test_past_seminar_can_stay_unchanged(self):
+        registration = Registration.objects.create(
+            seminar=self.past, participant=self.boris
+        )
+        response = self.post_update(registration, self.past, self.clara)
+        self.assertEqual(response.status_code, 302)
+
+    def test_change_to_duplicate_is_rejected(self):
+        Registration.objects.create(
+            seminar=self.future, participant=self.boris
+        )
+        response = self.post_update(
+            self.registration, self.future, self.boris
+        )
+        self.assertContains(response, "уже зарегистрирован")
+
+    def test_status_is_kept(self):
+        self.post_update(self.registration, self.future, self.boris)
+        self.registration.refresh_from_db()
+        self.assertEqual(
+            self.registration.status, Registration.Status.ACTIVE
+        )
+
+    def test_missing_registration_returns_404(self):
+        response = self.client.get(
+            reverse("registrations:update", args=[999999])
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_cancelled_registration_cannot_be_edited(self):
+        self.registration.cancel()
+        response = self.client.get(
+            reverse("registrations:update", args=[self.registration.pk])
+        )
+        self.assertEqual(response.status_code, 404)
+
+
+class RegistrationCancelTests(RegistrationFormTestData):
+    """Отмена регистрации POST-запросом."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.registration = Registration.objects.create(
+            seminar=cls.today_seminar, participant=cls.anna
+        )
+        cls.address = reverse(
+            "registrations:cancel", args=[cls.registration.pk]
+        )
+
+    def test_post_cancels_but_keeps_record(self):
+        response = self.client.post(self.address)
+        self.assertRedirects(response, reverse("registrations:list"))
+        self.registration.refresh_from_db()
+        self.assertEqual(
+            self.registration.status, Registration.Status.CANCELLED
+        )
+        self.assertEqual(Registration.objects.count(), 1)
+
+    def test_get_is_not_allowed(self):
+        response = self.client.get(self.address)
+        self.assertEqual(response.status_code, 405)
+        self.registration.refresh_from_db()
+        self.assertEqual(
+            self.registration.status, Registration.Status.ACTIVE
+        )
+
+    def test_second_cancel_returns_404(self):
+        self.client.post(self.address)
+        self.assertEqual(self.client.post(self.address).status_code, 404)
+
+    def test_missing_registration_returns_404(self):
+        response = self.client.post(
+            reverse("registrations:cancel", args=[999999])
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_cancel_without_csrf_token_is_forbidden(self):
+        client = Client(enforce_csrf_checks=True)
+        self.assertEqual(client.post(self.address).status_code, 403)
+
+    def test_cancelled_is_hidden_from_active_list(self):
+        self.client.post(self.address)
+        response = self.client.get(reverse("registrations:list"))
+        self.assertEqual(len(response.context["registrations"]), 0)
+
+    def test_cancel_frees_place(self):
+        # Единственное место занято: новая регистрация невозможна.
+        self.post_create(self.today_seminar, self.boris)
+        self.assertEqual(Registration.objects.active().count(), 1)
+        # После отмены место освобождается.
+        self.client.post(self.address)
+        self.post_create(self.today_seminar, self.boris)
+        active = Registration.objects.active().get()
+        self.assertEqual(active.participant, self.boris)
+
+    def test_buttons_only_for_active_registrations(self):
+        detail = reverse(
+            "registrations:detail", args=[self.registration.pk]
+        )
+        self.assertContains(self.client.get(detail), self.address)
+        self.client.post(self.address)
+        self.assertNotContains(self.client.get(detail), self.address)

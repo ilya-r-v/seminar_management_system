@@ -122,4 +122,11 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+# Загруженные пользователями файлы (изображения семинаров).
+# Они хранятся отдельно от статических файлов приложения.
+# URL для обращения к загруженным файлам.
+MEDIA_URL = "/media/"
+# Каталог, в котором файлы физически сохраняются.
+MEDIA_ROOT = BASE_DIR / "media"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

@@ -62,3 +62,42 @@ main {
 .stats-table {
     background-color: #ffffff;
 }
+
+/* Карточка с формой создания и редактирования */
+.form-card {
+    max-width: 640px;
+    border: 1px solid #dde3ec;
+    border-radius: 10px;
+}
+
+/* Область фильтров над списком */
+.filter-form {
+    padding: 1rem;
+    border: 1px solid #dde3ec;
+    border-radius: 10px;
+    background-color: #ffffff;
+}
+
+/* Поля фильтров стоят в сетке, нижний отступ им не нужен */
+.filter-form .form-field {
+    margin-bottom: 0 !important;
+}
+
+/* Кнопки фильтров на одной линии с полями ввода */
+.filter-buttons {
+    padding-top: 2rem;
+}
+
+/* Сообщение об ошибке под полем формы */
+.form-error {
+    color: #dc3545;
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+}
+
+/* Изображение на странице семинара */
+.seminar-image {
+    display: block;
+    max-height: 320px;
+    border-radius: 10px;
+}
